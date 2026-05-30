@@ -9,7 +9,7 @@ COPY packages/ui/package.json ./packages/ui/
 COPY packages/web/package.json ./packages/web/
 COPY packages/desktop/package.json ./packages/desktop/
 COPY packages/vscode/package.json ./packages/vscode/
-RUN bun install --frozen-lockfile --ignore-scripts
+RUN bun install --ignore-scripts
 
 FROM deps AS builder
 WORKDIR /app
@@ -47,8 +47,7 @@ RUN npm config set prefix /home/openchamber/.npm-global && mkdir -p /home/opench
   mkdir -p /home/openchamber/.local /home/openchamber/.config /home/openchamber/.ssh && \
   npm install -g opencode-ai
 
-# cloudflared 2026.3.0 - update digest explicitly when upgrading
-COPY --from=cloudflare/cloudflared@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0 /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+COPY --from=cloudflare/cloudflared:2026.3.0 /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 
 ENV NODE_ENV=production
 
