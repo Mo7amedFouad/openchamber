@@ -391,7 +391,6 @@ const getNormalizedMessageForDisplay = (message: ChatMessageEntry): ChatMessageE
 
 interface MessageListProps {
     sessionKey: string;
-    turnStart: number;
     disableStaging?: boolean;
     messages: ChatMessageEntry[];
     sessionIsWorking?: boolean;
@@ -405,9 +404,7 @@ interface MessageListProps {
     } | null;
     onMessageContentChange: (reason?: ContentChangeReason) => void;
     getAnimationHandlers: (messageId: string) => AnimationHandlers;
-    hasMoreAbove: boolean;
     isLoadingOlder: boolean;
-    onLoadOlder: () => void;
     scrollToBottom?: () => void;
     scrollRef?: React.RefObject<HTMLDivElement | null>;
 }
@@ -688,10 +685,11 @@ const TurnBlock = React.memo(({
             hasTools: turn.hasTools,
             hasReasoning: turn.hasReasoning,
             diffStats: turn.diffStats,
+            changedFiles: turn.changedFiles,
             userMessageCreatedAt: typeof userCreatedAt === 'number' ? userCreatedAt : undefined,
             userMessageVariant,
         };
-    }, [turn.diffStats, turn.hasReasoning, turn.hasTools, turn.headerMessageId, turn.summaryText, turn.turnId, turn.userMessage.info, visibleActivityParts, visibleActivitySegments]);
+    }, [turn.changedFiles, turn.diffStats, turn.hasReasoning, turn.hasTools, turn.headerMessageId, turn.summaryText, turn.turnId, turn.userMessage.info, visibleActivityParts, visibleActivitySegments]);
 
     const renderMessage = React.useCallback(
         (message: ChatMessageEntry) => {
@@ -739,6 +737,7 @@ const TurnBlock = React.memo(({
                         activityGroupSegments: turnGroupingContextBase.activityGroupSegments,
                         headerMessageId: turnGroupingContextBase.headerMessageId,
                         diffStats: turnGroupingContextBase.diffStats,
+                        changedFiles: turnGroupingContextBase.changedFiles,
                         userMessageCreatedAt: turnGroupingContextBase.userMessageCreatedAt,
                         userMessageVariant: turnGroupingContextBase.userMessageVariant,
                         isGroupExpanded: turnUiState.isExpanded,
@@ -1101,7 +1100,6 @@ StreamingTailContent.displayName = 'StreamingTailContent';
 
 const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({ 
     sessionKey,
-    turnStart,
     disableStaging = false,
     messages,
     sessionIsWorking = false,
@@ -1110,9 +1108,7 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
     retryOverlay = null,
     onMessageContentChange,
     getAnimationHandlers,
-    hasMoreAbove,
     isLoadingOlder,
-    onLoadOlder,
     scrollToBottom,
     scrollRef,
 }, ref) => {
@@ -1120,6 +1116,7 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
     const stickyUserHeader = useUIStore(state => state.stickyUserHeader);
     const chatRenderMode = useUIStore((state) => state.chatRenderMode);
     const activityRenderMode = useUIStore((state) => state.activityRenderMode);
+    const showTurnChangedFiles = useUIStore((state) => state.showTurnChangedFiles);
     const defaultActivityExpanded = activityRenderMode === 'summary';
     const [turnUiStates, setTurnUiStates] = React.useState<Map<string, TurnUiState>>(() => new Map());
     const userAnimationRef = React.useRef<{
@@ -1128,7 +1125,6 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
         animatedIds: Set<string>;
     }>({ sessionKey: undefined, previousOrder: [], animatedIds: new Set() });
     const stableGetAnimationHandlers = useStableEvent(getAnimationHandlers);
-    const stableOnLoadOlder = useStableEvent(onLoadOlder);
     const stableScrollToBottom = useStableEvent(() => {
         scrollToBottom?.();
     });
@@ -1219,6 +1215,7 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
     const { projection, staticTurns, streamingTurn } = useTurnRecords(displayMessages, {
         sessionKey,
         showTextJustificationActivity: chatRenderMode === 'sorted',
+        showTurnChangedFiles,
     });
     const hasUngroupedStaticEntries = projection.ungroupedMessageIds.size > 0;
     const staticEntryMessages = hasUngroupedStaticEntries ? displayMessages : EMPTY_STATIC_ENTRY_MESSAGES;
@@ -1675,24 +1672,6 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
 
     return (
         <div>
-                {(turnStart > 0 || hasMoreAbove) && (
-                    <div className="flex justify-center py-3">
-                        {isLoadingOlder ? (
-                            <span className="text-xs uppercase tracking-wide text-muted-foreground/80">
-                                Loading…
-                            </span>
-                        ) : (
-                            <button
-                                type="button"
-                                onClick={stableOnLoadOlder}
-                                className="text-xs uppercase tracking-wide text-muted-foreground/80 hover:text-foreground"
-                            >
-                                Load older messages
-                            </button>
-                        )}
-                    </div>
-                )}
-
                 <FadeInDisabledProvider disabled={disableFadeIn}>
                     <div className="relative w-full">
                         <StaticHistoryList

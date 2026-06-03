@@ -648,7 +648,10 @@ export interface SettingsPayload {
   queueModeEnabled?: boolean;
   gitmojiEnabled?: boolean;
   inputSpellcheckEnabled?: boolean;
+  showOpenCodeUpdateNotifications?: boolean;
+  openCodeUpdateToastDismissedVersion?: string;
   showToolFileIcons?: boolean;
+  showTurnChangedFiles?: boolean;
   showExpandedBashTools?: boolean;
   showExpandedEditTools?: boolean;
   chatRenderMode?: 'sorted' | 'live';
@@ -663,6 +666,7 @@ export interface SettingsPayload {
   padding?: number;
   cornerRadius?: number;
   inputBarOffset?: number;
+  shortcutOverrides?: Record<string, string>;
   diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side';
   diffViewMode?: 'single' | 'stacked';
   gitChangesViewMode?: 'flat' | 'tree';
@@ -716,6 +720,10 @@ export interface NotificationPayload {
   body?: string;
 
   tag?: string;
+  kind?: string;
+  sessionId?: string;
+  directory?: string;
+  requireHidden?: boolean;
 }
 
 export interface NotificationsAPI {
@@ -746,6 +754,9 @@ export interface VSCodeAPI {
   executeCommand(command: string, ...args: unknown[]): Promise<unknown>;
   openAgentManager(): Promise<void>;
   openExternalUrl(url: string): Promise<void>;
+  pickFiles?(): Promise<unknown>;
+  saveImage?(payload: unknown): Promise<unknown>;
+  saveMarkdown?(payload: unknown): Promise<unknown>;
 }
 
 export interface PushSubscribePayload {
@@ -1075,6 +1086,37 @@ export interface GitHubAPI {
   repoBranches(owner: string, repo: string): Promise<string[]>;
 }
 
+export interface RemoteClientRecord {
+  id: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  expiresAt?: string | null;
+  clientKind?: string | null;
+}
+
+export interface RemoteClientCreateResult {
+  client: RemoteClientRecord;
+  token: string;
+}
+
+export interface RemoteClientRevokeResult {
+  revoked: boolean;
+  client?: RemoteClientRecord;
+}
+
+export interface RemoteClientPurgeRevokedResult {
+  purged: number;
+}
+
+export interface ClientAuthAPI {
+  listClients(): Promise<RemoteClientRecord[]>;
+  createClient(input?: { label?: string }): Promise<RemoteClientCreateResult>;
+  purgeRevokedClients(): Promise<RemoteClientPurgeRevokedResult>;
+  revokeClient(id: string): Promise<RemoteClientRevokeResult>;
+}
+
 export interface RuntimeAPIs {
   runtime: RuntimeDescriptor;
   terminal: TerminalAPI;
@@ -1086,6 +1128,7 @@ export interface RuntimeAPIs {
   github?: GitHubAPI;
   push?: PushAPI;
   diagnostics?: DiagnosticsAPI;
+  clientAuth?: ClientAuthAPI;
   tools: ToolsAPI;
   editor?: EditorAPI;
   vscode?: VSCodeAPI;
