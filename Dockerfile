@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM oven/bun:1 AS base
+FROM oven/bun:1.3.5 AS base
 WORKDIR /app
 
 FROM base AS deps
@@ -7,6 +7,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY packages/ui/package.json ./packages/ui/
 COPY packages/web/package.json ./packages/web/
+COPY packages/electron/package.json ./packages/electron/
 COPY packages/vscode/package.json ./packages/vscode/
 RUN bun install --ignore-scripts
 
@@ -15,7 +16,7 @@ WORKDIR /app
 COPY . .
 RUN bun run build:web
 
-FROM oven/bun:1 AS runtime
+FROM oven/bun:1.3.5 AS runtime
 ARG TARGETARCH
 WORKDIR /home/openchamber
 
@@ -151,7 +152,8 @@ RUN npm config set prefix /home/openchamber/.npm-global && mkdir -p /home/opench
     sharp-cli \
     json-server http-server
 
-COPY --from=cloudflare/cloudflared:2026.3.0 /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+# cloudflared 2026.3.0 - update digest explicitly when upgrading
+COPY --from=cloudflare/cloudflared@sha256:ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 
 ENV NODE_ENV=production
 

@@ -17,6 +17,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { useAgentsStore, isAgentBuiltIn, isAgentHidden, type AgentScope, type AgentDraft } from '@/stores/useAgentsStore';
 import { useShallow } from 'zustand/react/shallow';
 import { cn } from '@/lib/utils';
@@ -180,19 +181,31 @@ export const AgentsSidebar: React.FC<AgentsSidebarProps> = ({ onItemSelect }) =>
     }
 
     setIsConfirmActionPending(true);
-    const success = await deleteAgent(confirmActionAgent.name);
+    try {
+      const success = await deleteAgent(confirmActionAgent.name, (confirmActionAgent as Agent & { scope?: AgentScope }).scope);
 
-    if (success) {
-      if (confirmActionType === 'delete') {
-        toast.success(t('settings.agents.sidebar.toast.agentDeleted', { name: confirmActionAgent.name }));
+      if (success) {
+        if (confirmActionType === 'delete') {
+          toast.success(t('settings.agents.sidebar.toast.agentDeleted', { name: confirmActionAgent.name }));
+        } else {
+          toast.success(t('settings.agents.sidebar.toast.agentReset', { name: confirmActionAgent.name }));
+        }
+        closeConfirmActionDialog();
+      } else if (confirmActionType === 'delete') {
+        toast.error(t('settings.agents.sidebar.toast.deleteFailed'));
       } else {
-        toast.success(t('settings.agents.sidebar.toast.agentReset', { name: confirmActionAgent.name }));
+        toast.error(t('settings.agents.sidebar.toast.resetFailed'));
       }
-      closeConfirmActionDialog();
-    } else if (confirmActionType === 'delete') {
-      toast.error(t('settings.agents.sidebar.toast.deleteFailed'));
-    } else {
-      toast.error(t('settings.agents.sidebar.toast.resetFailed'));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      const definitionMissing = /built-in|not deletable|not found/i.test(message);
+      if (confirmActionType === 'delete') {
+        toast.error(definitionMissing
+          ? t('settings.agents.sidebar.toast.definitionNotFound')
+          : t('settings.agents.sidebar.toast.deleteFailed'));
+      } else {
+        toast.error(t('settings.agents.sidebar.toast.resetFailed'));
+      }
     }
 
     setIsConfirmActionPending(false);
@@ -275,7 +288,7 @@ export const AgentsSidebar: React.FC<AgentsSidebarProps> = ({ onItemSelect }) =>
 
     if (success) {
       // Delete old agent
-      const deleteSuccess = await deleteAgent(renameDialogAgent.name);
+      const deleteSuccess = await deleteAgent(renameDialogAgent.name, renameExt.scope);
       if (deleteSuccess) {
         toast.success(`Agent renamed to "${sanitizedName}"`);
         setSelectedAgent(sanitizedName);
@@ -334,6 +347,7 @@ export const AgentsSidebar: React.FC<AgentsSidebarProps> = ({ onItemSelect }) =>
         <div className="flex items-center justify-between gap-2">
           <span className="typography-meta text-muted-foreground">{t('settings.agents.sidebar.total', { count: visibleAgents.length })}</span>
           <Button size="sm"
+            data-settings-item="agents.create"
             variant="ghost"
             className="h-7 w-7 px-0 -my-1 text-muted-foreground"
             onClick={handleCreateNew}
@@ -536,18 +550,37 @@ const AgentListItem: React.FC<AgentListItemProps> = ({
   const { t } = useI18n();
   const extAgent = agent as Agent & { scope?: AgentScope };
   const isMobile = isMobileDeviceViaCSS();
+  const [isContextMenuOpen, setIsContextMenuOpen] = React.useState(false);
+  const renderMenuItems = (Item: React.ElementType) => (
+    <>
+      {onRename && (
+        <Item onClick={(e: React.MouseEvent) => { e.stopPropagation(); onRename(); }}>
+          <Icon name="edit" className="h-4 w-4 mr-px" />
+          {t('settings.common.actions.rename')}
+        </Item>
+      )}
+      <Item onClick={(e: React.MouseEvent) => { e.stopPropagation(); onDuplicate(); }}>
+        <Icon name="file-copy" className="h-4 w-4 mr-px" />
+        {t('settings.common.actions.duplicate')}
+      </Item>
+      {onReset && (
+        <Item onClick={(e: React.MouseEvent) => { e.stopPropagation(); onReset(); }}>
+          <Icon name="restart" className="h-4 w-4 mr-px" />
+          {t('settings.common.actions.reset')}
+        </Item>
+      )}
+      {onDelete && (
+        <Item onClick={(e: React.MouseEvent) => { e.stopPropagation(); onDelete(); }} className="text-destructive focus:text-destructive">
+          <Icon name="delete-bin" className="h-4 w-4 mr-px" />
+          {t('settings.common.actions.delete')}
+        </Item>
+      )}
+    </>
+  );
   
   return (
-    <div
-      className={cn(
-        'group relative flex items-center rounded-md px-1.5 py-1 transition-all duration-200 select-none',
-        isSelected ? 'bg-interactive-selection' : 'hover:bg-interactive-hover'
-      )}
-      onContextMenu={!isMobile ? (e) => {
-        e.preventDefault();
-        onMenuOpenChange(true);
-      } : undefined}
-    >
+    <ContextMenu open={isContextMenuOpen} onOpenChange={setIsContextMenuOpen}>
+      <ContextMenuTrigger render={<div className={cn('group relative flex items-center rounded-md px-1.5 py-1 transition-all duration-200 select-none', isSelected ? 'bg-interactive-selection' : 'hover:bg-interactive-hover')} onContextMenu={!isMobile ? (e) => { e.preventDefault(); setIsContextMenuOpen(true); } : undefined} />}>
       <div className="flex min-w-0 flex-1 items-center">
         <button
           onClick={onSelect}
@@ -573,7 +606,7 @@ const AgentListItem: React.FC<AgentListItemProps> = ({
           )}
         </button>
 
-        <DropdownMenu open={isMenuOpen} onOpenChange={onMenuOpenChange}>
+        <DropdownMenu open={isMenuOpen} onOpenChange={(open) => { if (open) setIsContextMenuOpen(false); onMenuOpenChange(open); }}>
           <DropdownMenuTrigger asChild>
             <Button size="sm"
               variant="ghost"
@@ -583,55 +616,14 @@ const AgentListItem: React.FC<AgentListItemProps> = ({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-fit min-w-20">
-            {onRename && (
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRename();
-                }}
-              >
-                <Icon name="edit" className="h-4 w-4 mr-px" />
-                {t('settings.common.actions.rename')}
-              </DropdownMenuItem>
-            )}
-
-            <DropdownMenuItem
-              onClick={(e) => {
-                e.stopPropagation();
-                onDuplicate();
-              }}
-            >
-              <Icon name="file-copy" className="h-4 w-4 mr-px" />
-              {t('settings.common.actions.duplicate')}
-            </DropdownMenuItem>
-
-            {onReset && (
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onReset();
-                }}
-              >
-                <Icon name="restart" className="h-4 w-4 mr-px" />
-                {t('settings.common.actions.reset')}
-              </DropdownMenuItem>
-            )}
-
-            {onDelete && (
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete();
-                }}
-                className="text-destructive focus:text-destructive"
-              >
-                <Icon name="delete-bin" className="h-4 w-4 mr-px" />
-                {t('settings.common.actions.delete')}
-              </DropdownMenuItem>
-            )}
+            {renderMenuItems(DropdownMenuItem)}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-    </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-fit min-w-20">
+        {renderMenuItems(ContextMenuItem)}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 };
