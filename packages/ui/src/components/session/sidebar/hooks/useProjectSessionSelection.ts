@@ -22,11 +22,9 @@ type Args = {
   openNewSessionDraft: (options?: { directoryOverride?: string | null }) => void;
   setActiveMainTab: (tab: MainTab) => void;
   setSessionSwitcherOpen: (open: boolean) => void;
-  sessions: Session[];
-  worktreeMetadata: Map<string, { path?: string | null }>;
 };
 
-export const useProjectSessionSelection = (args: Args): { currentSessionDirectory: string | null } => {
+export const useProjectSessionSelection = (args: Args): void => {
   const {
     projectSections,
     activeProjectId,
@@ -39,8 +37,6 @@ export const useProjectSessionSelection = (args: Args): { currentSessionDirector
     openNewSessionDraft,
     setActiveMainTab,
     setSessionSwitcherOpen,
-    sessions,
-    worktreeMetadata,
   } = args;
 
   const projectSessionMeta = React.useMemo(() => {
@@ -101,6 +97,7 @@ export const useProjectSessionSelection = (args: Args): { currentSessionDirector
     if (previousActiveProjectRef.current === activeProjectId) {
       return;
     }
+
     const section = projectSections.find((item) => item.project.id === activeProjectId);
     if (!section) {
       return;
@@ -117,6 +114,15 @@ export const useProjectSessionSelection = (args: Args): { currentSessionDirector
         next.set(activeProjectId, currentSessionId);
         return next;
       });
+      return;
+    }
+
+    // Path A' — currentSessionId is set but not in stale projectMap.
+    // Preserve user's explicit selection when the projectMap exists but
+    // is missing the session (worktree data not yet loaded). For
+    // empty projects (projectMap is undefined), fall through to Path B
+    // so a new session draft is opened.
+    if (currentSessionId && projectMap) {
       return;
     }
 
@@ -173,20 +179,4 @@ export const useProjectSessionSelection = (args: Args): { currentSessionDirector
     });
   }, [activeProjectId, currentSessionId, projectSessionMeta, setActiveSessionByProject]);
 
-  const currentSessionDirectory = React.useMemo(() => {
-    if (!currentSessionId) {
-      return null;
-    }
-    const metadataPath = worktreeMetadata.get(currentSessionId)?.path;
-    if (metadataPath) {
-      return normalizePath(metadataPath) ?? metadataPath;
-    }
-    const activeSession = sessions.find((session) => session.id === currentSessionId);
-    if (!activeSession) {
-      return null;
-    }
-    return normalizePath((activeSession as Session & { directory?: string | null }).directory ?? null);
-  }, [currentSessionId, sessions, worktreeMetadata]);
-
-  return { currentSessionDirectory };
 };

@@ -18,13 +18,6 @@ import { getRuntimeUrlResolver } from "@/lib/runtime-url"
 import { clearRuntimeUrlAuthToken, refreshRuntimeUrlAuthToken } from "@/lib/runtime-auth"
 import { syncDebug } from "./debug"
 
-export type QueuedEvent = {
-  directory: string
-  payload: Event
-}
-
-export type FlushHandler = (events: QueuedEvent[]) => void
-
 const FLUSH_FRAME_MS = 33
 const BACKPRESSURE_FLUSH_FRAME_MS = 200
 const BACKPRESSURE_MODE_MS = 10_000
@@ -447,6 +440,26 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     const normalizedPayload = normalizeEventType(payload)
     const routedDirectory = routeDirectory?.(directory, normalizedPayload) || directory
     const d = getOrCreateDir(routedDirectory)
+
+    // A full part snapshot is a coalescing barrier for that part's deltas:
+    // drop its pending delta coalescing keys so a delta arriving after the
+    // snapshot starts a fresh queue entry instead of merging into a delta
+    // queued before the snapshot, which the snapshot would then overwrite and
+    // drop the later delta's text. The already-queued delta event stays.
+    if (normalizedPayload.type === "message.part.updated") {
+      const part = (normalizedPayload.properties as { part?: { id?: unknown; messageID?: unknown } }).part
+      const messageID = typeof part?.messageID === "string" ? part.messageID : undefined
+      const partID = typeof part?.id === "string" ? part.id : undefined
+      if (messageID && partID) {
+        const deltaPrefix = `message.part.delta:${messageID}:${partID}:`
+        for (const coalesceKey of d.coalesced.keys()) {
+          if (coalesceKey.startsWith(deltaPrefix)) {
+            d.coalesced.delete(coalesceKey)
+          }
+        }
+      }
+    }
+
     const k = key(normalizedPayload)
     if (k) {
       const i = d.coalesced.get(k)

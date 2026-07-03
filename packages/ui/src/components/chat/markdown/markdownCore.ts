@@ -13,7 +13,7 @@ const escapeAttr = (value: string): string =>
 // Streaming block segmentation (port of OpenCode's markdown-stream)
 // ---------------------------------------------------------------------------
 
-export type MarkdownBlock = {
+type MarkdownBlock = {
   raw: string;
   src: string;
   mode: 'full' | 'live';
@@ -54,7 +54,7 @@ const heal = (text: string): string => {
  * unclosed trailing code fence into its own `live` block so a partial fence
  * does not corrupt the parse of stable content above it.
  */
-export const streamBlocks = (text: string, live: boolean): MarkdownBlock[] => {
+const streamBlocks = (text: string, live: boolean): MarkdownBlock[] => {
   if (!live) return [{ raw: text, src: text, mode: 'full', highlight: true }];
   // Reference-style links/footnotes span multiple tokens (definition elsewhere);
   // keep them as a single block so per-block parsing doesn't break the refs.
@@ -306,16 +306,6 @@ const sanitize = (html: string): string => {
   return DOMPurify.sanitize(html, SANITIZE_CONFIG) as unknown as string;
 };
 
-const escapeHtml = (text: string): string =>
-  text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-export const fallbackHtml = (markdown: string): string =>
-  escapeHtml(markdown).replace(/\r\n?/g, '\n').replace(/\n/g, '<br>');
 
 // ---------------------------------------------------------------------------
 // Per-block HTML cache (LRU, mirrors OpenCode's checksum cache)
@@ -347,6 +337,22 @@ const parseBlock = async (block: MarkdownBlock): Promise<string> => {
   const withMath = renderMathExpressions(parsed);
   const highlighted = block.highlight ? await highlightCodeBlocks(withMath) : withMath;
   return sanitize(highlighted);
+};
+
+/**
+ * Synchronous styled render for the first paint, before the async pipeline
+ * (Shiki-in-worker highlight) resolves. Produces the SAME structural HTML as
+ * `renderMarkdownBlocks` minus syntax coloring: paragraphs, lists, code blocks
+ * and bold all render at their final width, so the async pass only upgrades
+ * code-block colors — no flash of full-width raw markdown source. `parser.parse`
+ * is synchronous (marked is not configured `async`), so this never blocks on a
+ * worker round-trip.
+ */
+export const renderMarkdownSync = (text: string): string => {
+  if (!text) return '';
+  const parsed = parser.parse(text) as string;
+  const withMath = renderMathExpressions(parsed);
+  return sanitize(withMath);
 };
 
 export type RenderedBlock = {

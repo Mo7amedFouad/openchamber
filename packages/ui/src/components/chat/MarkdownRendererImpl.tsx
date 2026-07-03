@@ -1,5 +1,4 @@
 import React from 'react';
-import 'katex/dist/katex.min.css';
 import morphdom from 'morphdom';
 import { renderMermaidASCII, renderMermaidSVG } from 'beautiful-mermaid';
 import type { Part } from '@opencode-ai/sdk/v2';
@@ -17,9 +16,10 @@ import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { EditorAPI } from '@/lib/api/types';
 import { isDesktopLocalOriginActive, isDesktopShell, isVSCodeRuntime } from '@/lib/desktop';
+import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 import { ensureOutsideFileGrantForDesktop } from '@/lib/outsideFileGrants';
 import { getDirectoryForFilePath, isAbsoluteFilePath, isFilePathWithinDirectory, normalizeFilePath, toAbsoluteFilePath } from '@/lib/path-utils';
-import { fallbackHtml, renderMarkdownBlocks } from './markdown/markdownCore';
+import { renderMarkdownBlocks, renderMarkdownSync } from './markdown/markdownCore';
 import { ensureMarkdownShikiTheme, getMarkdownSyntaxVars } from './markdown/markdownTheme';
 import {
   attachMarkdownInteractions,
@@ -571,6 +571,11 @@ const useFileReferenceInteractions = ({
     }
     let cancelled = false;
     const fileReferenceLinkLimit = getFileReferenceLinkLimit();
+    // On mobile surfaces, file-reference highlighting is disabled entirely — not
+    // just visually. The annotation pass is what issues the filesystem `stat`
+    // probes (fileReferenceExists → /api/fs/stat), so skipping it here guarantees
+    // no probe requests are ever sent from a mobile runtime.
+    const fileReferencesEnabled = enabled && !isMobileSurfaceRuntime();
 
     const clearFileLinkAttributes = (candidate: HTMLElement) => {
       candidate.removeAttribute('data-openchamber-file-link');
@@ -593,7 +598,7 @@ const useFileReferenceInteractions = ({
       unwrapBlockCodePathTokens(container);
     };
 
-    if (!enabled) {
+    if (!fileReferencesEnabled) {
       clearAnnotatedFileLinks();
       return;
     }
@@ -617,7 +622,7 @@ const useFileReferenceInteractions = ({
     };
 
     const annotateFileLinks = () => {
-      if (enabled) {
+      if (fileReferencesEnabled) {
         wrapBlockCodePathTokens(container);
       }
       const candidates = container.querySelectorAll<HTMLElement>(
@@ -960,7 +965,7 @@ const mermaidColorsFromTheme = (theme: Theme) => ({
   surface: theme.colors.surface.muted,
   border: theme.colors.interactive.border,
   transparent: true,
-  font: 'IBM Plex Sans, sans-serif',
+  font: 'system-ui, sans-serif',
 });
 
 const useDecorateContext = (
@@ -1032,10 +1037,16 @@ const useMorphdomMarkdown = ({
       // `display:contents` keeps margin-collapsing/spacing identical to a flat
       // HTML body — the wrapper exists only for per-block reconciliation.
       block.style.display = 'contents';
-      block.innerHTML = fallbackHtml(text);
+      block.innerHTML = renderMarkdownSync(text);
+      // Decorate synchronously too: wrap code blocks in their framed card,
+      // mark inline code, build table controls, etc. The async pass re-decorates
+      // its own DOM before morphing, so without this the first paint shows bare
+      // <pre>/tables that "snap" into their decorated form a tick later. Matching
+      // the structure here keeps the async morph to syntax colors only.
+      decorateMarkdown(block, ctx);
       target.appendChild(block);
     }
-  }, [containerRef, text]);
+  }, [containerRef, text, ctx]);
 
   React.useEffect(() => {
     const container = containerRef.current;
