@@ -301,6 +301,23 @@ export const createOpenCodeEnvRuntime = (deps) => {
     return null;
   };
 
+  const canonicalExecutablePath = (candidate) => {
+    if (typeof candidate !== 'string' || !candidate.trim()) return null;
+    try {
+      return fs.realpathSync.native(candidate.trim());
+    } catch {
+      return path.resolve(candidate.trim());
+    }
+  };
+
+  const isBundledOpenCodeCliPath = (candidate) => {
+    const canonicalCandidate = canonicalExecutablePath(candidate);
+    if (!canonicalCandidate) return false;
+    return bundledOpenCodeCliCandidates().some((bundledCandidate) => (
+      canonicalExecutablePath(bundledCandidate) === canonicalCandidate
+    ));
+  };
+
   const bundledOpenCodeCliFallback = () => {
     const bundled = resolveBundledOpenCodeCliPath();
     if (!bundled) return null;
@@ -347,9 +364,9 @@ export const createOpenCodeEnvRuntime = (deps) => {
       }
     }
 
-    // The bundled CLI is the LAST resort (see bundledOpenCodeCliFallback at the
-    // exit points below): a user's own OpenCode install — PATH, known install
-    // locations, or shell-resolved — must win over the pinned bundled copy.
+    const bundled = bundledOpenCodeCliFallback();
+    if (bundled) return bundled;
+
     const resolvedFromPath = searchPathFor('opencode');
     if (resolvedFromPath) {
       clearWslOpencodeResolution();
@@ -427,7 +444,7 @@ export const createOpenCodeEnvRuntime = (deps) => {
       // Do not auto-detect OpenCode from WSL. OpenCode sessions are keyed by
       // server-visible directories, and mixing Windows paths with WSL paths
       // creates duplicate/missing project state in the desktop app.
-      return bundledOpenCodeCliFallback();
+      return null;
     }
 
     const shells = [process.env.SHELL, '/bin/zsh', '/bin/bash', '/bin/sh'].filter(Boolean);
@@ -451,7 +468,7 @@ export const createOpenCodeEnvRuntime = (deps) => {
       }
     }
 
-    return bundledOpenCodeCliFallback();
+    return null;
   };
 
   const resolveNodeCliPath = () => {
@@ -647,8 +664,15 @@ export const createOpenCodeEnvRuntime = (deps) => {
   };
 
   const getWindowsNativeOpencodePackageNames = () => {
+    // TEMPORARY WORKAROUND — Windows ARM64: native opencode.exe fails with a Bun
+    // FFI/TinyCC dlopen error (https://github.com/anomalyco/opencode/issues/19130).
+    // prepare-opencode-cli.mjs bundles x64-baseline instead; match that here so
+    // the runtime resolver looks for the same x64-baseline package. Restore the
+    // arm64 branch below when the upstream issue is resolved.
     if (process.arch === 'arm64') {
-      return ['opencode-windows-arm64'];
+      // --- ORIGINAL (restore when ARM64 is fixed) ---
+      // return ['opencode-windows-arm64'];
+      return ['opencode-windows-x64-baseline', 'opencode-windows-x64'];
     }
     if (process.arch === 'x64') {
       // Prefer the baseline build when bypassing package-manager wrappers so the
@@ -1164,6 +1188,7 @@ export const createOpenCodeEnvRuntime = (deps) => {
     applyOpencodeBinaryFromSettings,
     getLoginShellEnvSnapshot,
     resolveOpencodeCliPath,
+    isBundledOpenCodeCliPath,
     resolveManagedOpenCodeLaunchSpec,
     isExecutable,
     searchPathFor,
