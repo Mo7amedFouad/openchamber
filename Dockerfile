@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   fonts-inter \
   fzf \
   git \
+  git-lfs \
   htop \
   imagemagick \
   iproute2 \
@@ -85,7 +86,7 @@ RUN ln -sf /usr/bin/batcat /usr/local/bin/bat 2>/dev/null || true \
   && ln -sf /usr/bin/fdfind /usr/local/bin/fd 2>/dev/null || true
 
 # ---------- Playwright (uses system Chromium via env vars) ----------
-RUN pip install --no-cache-dir --break-system-packages playwright==1.60.0
+RUN pip install --no-cache-dir --break-system-packages playwright==1.62.1
 
 # ---------- GitHub CLI ----------
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -95,7 +96,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
 
 # ---------- lazygit ----------
-RUN LAZYGIT_VERSION=0.62.0 && \
+RUN LAZYGIT_VERSION=0.63.1 && \
     LAZYGIT_ARCH=$(case "$TARGETARCH" in arm64) echo "arm64";; *) echo "x86_64";; esac) && \
     curl -fsSL -o /tmp/lazygit.tar.gz \
       "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_${LAZYGIT_ARCH}.tar.gz" && \
@@ -111,21 +112,33 @@ RUN DELTA_VERSION=0.19.2 && \
     rm /tmp/delta.deb
 
 # ---------- eza (modern ls replacement) ----------
-RUN EZA_VERSION=0.23.4 && \
+RUN EZA_VERSION=0.23.5 && \
     EZA_ARCH=$(case "$TARGETARCH" in arm64) echo "aarch64";; *) echo "x86_64";; esac) && \
     curl -fsSL -o /tmp/eza.tar.gz \
       "https://github.com/eza-community/eza/releases/download/v${EZA_VERSION}/eza_${EZA_ARCH}-unknown-linux-gnu.tar.gz" && \
     tar -C /usr/local/bin -xzf /tmp/eza.tar.gz && \
     rm /tmp/eza.tar.gz
 
+# ---------- yq (YAML/JSON/XML processor) ----------
+RUN YQ_VERSION=4.53.3 && \
+    YQ_ARCH=$(case "$TARGETARCH" in arm64) echo "arm64";; *) echo "amd64";; esac) && \
+    curl -fsSL -o /usr/local/bin/yq \
+      "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${YQ_ARCH}" && \
+    chmod +x /usr/local/bin/yq
+
+# ---------- uv (fast Python package and project manager) ----------
+RUN curl -fsSL https://astral.sh/uv/0.12.0/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh && \
+    rm -rf /root/.cache/uv
+
 # ---------- Python packages (data science, web, utilities) ----------
 RUN pip install --no-cache-dir --break-system-packages \
-    requests==2.34.2 httpx==0.28.1 beautifulsoup4==4.14.3 lxml==6.1.1 \
-    Pillow==12.2.0 openpyxl==3.1.5 python-docx==1.2.0 \
-    pandas==3.0.3 numpy==2.4.6 matplotlib==3.10.9 seaborn==0.13.2 \
-    rich==15.0.0 click==8.4.1 tqdm==4.67.3 apprise==1.10.0 \
-    jinja2==3.1.6 pyyaml==6.0.3 python-dotenv==1.2.2 markdown==3.10.2 \
-    fastapi==0.136.3 uvicorn==0.48.0
+    requests==2.34.2 httpx==0.28.1 beautifulsoup4==4.15.0 lxml==6.1.1 \
+    Pillow==12.3.0 openpyxl==3.1.5 python-docx==1.2.0 \
+    pandas==3.0.5 numpy==2.5.1 matplotlib==3.11.1 seaborn==0.13.2 \
+    rich==15.0.0 click==8.4.2 tqdm==4.70.0 apprise==1.12.0 \
+    jinja2==3.1.6 pyyaml==6.0.3 python-dotenv==1.2.2 markdown==3.10.3 \
+    fastapi==0.141.1 uvicorn==0.52.0 \
+    pipx black
 
 RUN rm -f /usr/local/bin/dotenv
 
@@ -159,8 +172,8 @@ RUN npm config set prefix /home/openchamber/.npm-global && mkdir -p /home/opench
     sharp-cli \
     json-server http-server
 
-# cloudflared 2026.3.0 - update digest explicitly when upgrading
-COPY --from=cloudflare/cloudflared@sha256:6d91c121b803126f7a5344005d17a9324788fc09d305b6e2560ec6040a7ae283 /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+# cloudflared 2026.7.3 - update digest explicitly when upgrading
+COPY --from=cloudflare/cloudflared@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 
 ENV NODE_ENV=production
 

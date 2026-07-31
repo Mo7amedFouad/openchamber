@@ -1342,6 +1342,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.dictation.cancel': 'Відхилити диктування',
   'chat.dictation.insert': 'Вставити текст',
   'chat.dictation.insertAndSend': 'Вставити й надіслати',
+  'chat.dictation.retry': 'Повторити розшифровку',
+  'chat.dictation.discard': 'Відхилити запис',
   'chat.history.loadOlder': 'Завантажити ще',
   'chat.autoReview.title': 'Цикл код-ревʼю триває',
   'chat.autoReview.status.waitingForReviewer': 'Очікуємо ревʼювера',

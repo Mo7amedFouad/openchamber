@@ -1342,6 +1342,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.dictation.cancel': 'Descartar ditado',
   'chat.dictation.insert': 'Inserir transcrição',
   'chat.dictation.insertAndSend': 'Inserir e enviar',
+  'chat.dictation.retry': 'Tentar transcrever novamente',
+  'chat.dictation.discard': 'Descartar gravação',
   'chat.history.loadOlder': 'Carregar mensagens anteriores',
   'chat.autoReview.title': 'O ciclo de revisão de código está em andamento',
   'chat.autoReview.status.waitingForReviewer': 'Aguardando o revisor',
