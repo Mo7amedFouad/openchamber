@@ -86,7 +86,7 @@ RUN ln -sf /usr/bin/batcat /usr/local/bin/bat 2>/dev/null || true \
   && ln -sf /usr/bin/fdfind /usr/local/bin/fd 2>/dev/null || true
 
 # ---------- Playwright (uses system Chromium via env vars) ----------
-RUN pip install --no-cache-dir --break-system-packages playwright==1.62.1
+RUN pip install --no-cache-dir --break-system-packages playwright==1.61.0
 
 # ---------- GitHub CLI ----------
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
