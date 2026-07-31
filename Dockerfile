@@ -40,8 +40,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   less \
   lsof \
   build-essential \
-  nodejs \
-  npm \
   openssh-client \
   pandoc \
   pkg-config \
@@ -60,6 +58,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   vim \
   wget \
   zip \
+  && rm -rf /var/lib/apt/lists/*
+
+# Node.js 22 LTS - apt's nodejs (20.x) is too old for openchamber (>=22) and
+# oh-my-opencode deps like posthog-node (>=22.22.0)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+  && apt-get update && apt-get install -y --no-install-recommends nodejs \
   && rm -rf /var/lib/apt/lists/*
 
 # ---------- Headless browser (Chromium + Xvfb + fonts) ----------
