@@ -70,10 +70,13 @@ import { Icon } from "@/components/icon/Icon";
 import { useMessageTTS } from '@/hooks/useMessageTTS';
 import { ensurePierreThemeRegistered } from '@/lib/shiki/appThemeRegistry';
 import { getDefaultTheme } from '@/lib/theme/themes';
-import { openDesktopFileInApp, openDesktopPath } from '@/lib/desktop';
+import { isBrowserClientRuntime, openDesktopFileInApp, openDesktopPath } from '@/lib/desktop';
 import { useOpenInAppsStore } from '@/stores/useOpenInAppsStore';
 import { eventMatchesShortcut, getEffectiveShortcutCombo } from '@/lib/shortcuts';
 import { useI18n } from '@/lib/i18n';
+import { sessionEvents } from '@/lib/sessionEvents';
+import { syncScheduledTaskLoops } from '@/lib/scheduledTasksApi';
+import { useProjectsStore } from '@/stores/useProjectsStore';
 
 type FileNode = {
   name: string;
@@ -360,6 +363,7 @@ interface FileRowProps {
   isExpanded: boolean;
   isActive: boolean;
   isMobile: boolean;
+  isBrowserClient: boolean;
   alwaysShowActions: boolean;
   status?: FileStatus | null;
   badge?: { modified: number; added: number } | null;
@@ -387,6 +391,7 @@ const FileRow: React.FC<FileRowProps> = ({
   isExpanded,
   isActive,
   isMobile,
+  isBrowserClient,
   alwaysShowActions,
   status,
   badge,
@@ -404,14 +409,17 @@ const FileRow: React.FC<FileRowProps> = ({
   const { t } = useI18n();
   const isDir = node.type === 'directory';
   const { canRename, canCreateFile, canCreateFolder, canDelete, canReveal } = permissions;
+  const canDownload = !isDir && Boolean(downloadFile);
+  const canRevealPath = canReveal && !isBrowserClient;
+  const hasMenuActions = canRename || canCreateFile || canCreateFolder || canDelete || canDownload || canRevealPath;
 
   const handleContextMenu = React.useCallback((event?: React.MouseEvent) => {
-    if (!canRename && !canCreateFile && !canCreateFolder && !canDelete && !canReveal) {
+    if (!hasMenuActions) {
       return;
     }
     event?.preventDefault();
     setRightClickMenuPath(node.path);
-  }, [canRename, canCreateFile, canCreateFolder, canDelete, canReveal, node.path, setRightClickMenuPath]);
+  }, [hasMenuActions, node.path, setRightClickMenuPath]);
 
   const handleInteraction = React.useCallback(() => {
     if (isDir) {
@@ -473,10 +481,10 @@ const FileRow: React.FC<FileRowProps> = ({
             toast.error(t('sidebarFilesTree.toast.operationFailed'));
           });
         }}>
-          <Icon name="download" className="mr-2 size-4" /> {t('sidebarFilesTree.menu.save')}
+          <Icon name="download" className="mr-2 size-4" /> {t(isBrowserClient ? 'sidebarFilesTree.menu.download' : 'sidebarFilesTree.menu.save')}
         </Item>
       )}
-      {canReveal && (
+      {canRevealPath && (
         <Item onClick={(e: React.MouseEvent) => { e.stopPropagation(); onRevealPath(node.path); }}>
           <Icon name="folder-received" className="mr-2 size-4" /> {t(getRevealLabelKey())}
         </Item>
@@ -545,7 +553,7 @@ const FileRow: React.FC<FileRowProps> = ({
           </span>
         )}
       </button>
-      {(canRename || canCreateFile || canCreateFolder || canDelete || canReveal) && (
+      {hasMenuActions && (
         <div className={cn(
           "absolute right-1 top-1/2 -translate-y-1/2",
           alwaysShowActions ? "opacity-100" : "opacity-0 focus-within:opacity-100 group-hover:opacity-100"
@@ -719,6 +727,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
   const { files, runtime } = useRuntimeAPIs();
   const { currentTheme, availableThemes, lightThemeId, darkThemeId } = useThemeSystem();
   const { isMobile, isTablet, screenWidth } = useDeviceInfo();
+  const isBrowserClient = isBrowserClientRuntime(runtime.platform);
   const alwaysShowActions = isMobile || isTablet;
   const showHidden = useDirectoryShowHidden();
   const showGitignored = useFilesViewShowGitignored();
@@ -1655,6 +1664,22 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
         return false;
       }
       setFileContent(draftContent);
+      if (root && isPathWithinRoot(selectedFile.path, root)) {
+        const relativePath = getDisplayPath(root, selectedFile.path);
+        if (relativePath) {
+          sessionEvents.requestGitRefresh({ directory: root, paths: [relativePath] });
+        }
+      }
+      if (root && /(?:^|\/)\.agents\/loops\/[^/]+\.md$/i.test(normalizePath(selectedFile.path))) {
+        const project = useProjectsStore.getState().projects.find((entry) => normalizePath(entry.path) === normalizePath(root));
+        if (project) {
+          try {
+            await syncScheduledTaskLoops(project.id);
+          } catch {
+            toast.error(t('sessions.scheduledTasks.dialog.toast.updateFailed'));
+          }
+        }
+      }
       if (selectedFile?.path && isDrawioFile(selectedFile.path)) {
         diagramXmlRef.current = draftContent;
         diagramSavedXmlRef.current = draftContent;
@@ -1674,7 +1699,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
     } finally {
       setIsSaving(false);
     }
-  }, [contentDetectedBinary, draftContent, fileContent, fileLoading, files, isDirty, loadedFileLineEnding, loadedFilePath, readFileStat, selectedFile, t]);
+  }, [contentDetectedBinary, draftContent, fileContent, fileLoading, files, isDirty, loadedFileLineEnding, loadedFilePath, readFileStat, root, selectedFile, t]);
 
   React.useEffect(() => {
     if (!isDirty) {
@@ -2295,6 +2320,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full' }) => {
             isExpanded={isExpanded}
             isActive={isActive}
             isMobile={isMobile}
+            isBrowserClient={isBrowserClient}
             alwaysShowActions={alwaysShowActions}
             status={!isDir ? getFileStatus(node.path) : undefined}
             badge={isDir ? getFolderBadge(node.path) : undefined}

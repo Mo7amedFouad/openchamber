@@ -20,6 +20,13 @@ edge (`components/layout/ContextPanelRail.tsx`) and rendered by
 - Rail order is user-reorderable and persisted globally in
   `useUIStore.contextRailOrder`; `sortContextSurfaces` applies it on top of the
   registry's default order and appends any missing surfaces.
+- `getVisibleContextRailSurfaces` is the single visibility filter shared by the
+  rail and the global surface-switch shortcut (`switch_context_surface` in
+  `lib/shortcuts.ts`): it drops the plan surface unless plan mode is enabled,
+  drops the walkthrough on VS Code and below `WALKTHROUGH_MIN_WIDTH`, and hides
+  `has-content` surfaces until a tab of their mode exists. Both consumers use
+  it so the digit shown on a rail badge always maps to the same surface the
+  shortcut opens.
 
 ## Adding a surface
 
@@ -37,11 +44,13 @@ the `openContext*` actions in `useUIStore`.
 
 - Opening a surface must never require a control outside the rail, the
   command palette, or an in-content link.
-- Multi-instance and session-holding surfaces (file/editor, chat, diff,
-  browser, terminal) are keep-alive panes in `ContextPanel.tsx`: switching
+- Multi-instance and session-holding surfaces (file/editor, diff, browser,
+  terminal) are keep-alive panes in `ContextPanel.tsx`. Switching these
   surfaces must not reset their state (open tabs, xterm session, scroll
-  positions). Singleton surfaces (git, pr, notes, plan, context) and preview
-  tabs intentionally remount on switch and must restore themselves from
-  their stores/snapshots instead.
+  positions). Chat tab records stay open, but only the active chat iframe is
+  mounted while the panel is open. A selected chat restores its state from
+  the session stores. A closed panel mounts no chat iframe.
+  Singleton surfaces (git, pr, notes, plan, context) and preview tabs remount
+  on switch. These surfaces must restore their state from stores or snapshots.
 - Runtime scope: desktop/web `MainLayout` only. VS Code and the dedicated
   mobile shell have their own layouts and do not consume this registry.

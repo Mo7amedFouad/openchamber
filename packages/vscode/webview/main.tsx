@@ -1064,7 +1064,7 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     }
   }
 
-  const quotaCredentialMatch = pathname.match(/^\/api\/quota\/credentials\/(opencode-go|ollama-cloud|cursor)(?:\/(validate|import))?$/);
+  const quotaCredentialMatch = pathname.match(/^\/api\/quota\/credentials\/(ollama-cloud|cursor)(?:\/(validate|import))?$/);
   if (quotaCredentialMatch) {
     try {
       const body = method === 'PUT' ? await extractJsonBody(input, init, method) : undefined;
@@ -1112,6 +1112,30 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     try {
       const data = await sendBridgeMessage('api:provider/source:get', { providerId, directory: queryDirectory });
       return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
+  // Handle custom provider upsert: PUT /api/provider
+  if (pathname === '/api/provider' && method === 'PUT') {
+    try {
+      const body = await extractJsonBody(input, init, method);
+      const queryDirectory = url.searchParams.get('directory') || undefined;
+      const data = await sendBridgeMessage('api:provider:upsert', {
+        ...(body && typeof body === 'object' ? body : {}),
+        directory: queryDirectory
+          ?? (body && typeof body === 'object' && typeof body.directory === 'string' ? body.directory : undefined),
+      });
+      if (data && typeof data === 'object' && 'success' in data && (data as { success?: boolean }).success === false) {
+        const message = (data as { error?: string }).error || 'Failed to save provider config';
+        return new Response(JSON.stringify({ error: message }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify((data as { data?: unknown })?.data ?? data), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return new Response(JSON.stringify({ error: message }), { status: 500, headers: { 'Content-Type': 'application/json' } });

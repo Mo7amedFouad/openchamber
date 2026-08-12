@@ -1,14 +1,21 @@
 import React from 'react';
 
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
+import { DiffViewIcon } from '@/components/icons/DiffIcon';
 import { Button } from '@/components/ui/button';
 import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
-import { DiffView } from '@/components/views/DiffView';
-import { FilesView } from '@/components/views/FilesView';
-import { GitView } from '@/components/views/GitView';
 import { PullRequestView } from '@/components/views/PullRequestView';
 import { TerminalView } from '@/components/views/TerminalView';
-import { PlanView } from '@/components/views/PlanView';
+import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
+
+// Heavy views stay on-demand (same as MainLayout): importing DiffView/FilesView
+// or the walkthrough statically pulls the CodeMirror and @pierre/diffs stacks
+// into the eager startup graph even when no such tab is open.
+const WalkthroughView = lazyWithChunkRecovery(() => import('@/components/views/walkthrough/WalkthroughView').then((m) => ({ default: m.WalkthroughView })));
+const DiffView = lazyWithChunkRecovery(() => import('@/components/views/DiffView').then((m) => ({ default: m.DiffView })));
+const FilesView = lazyWithChunkRecovery(() => import('@/components/views/FilesView').then((m) => ({ default: m.FilesView })));
+const GitView = lazyWithChunkRecovery(() => import('@/components/views/GitView').then((m) => ({ default: m.GitView })));
+const PlanView = lazyWithChunkRecovery(() => import('@/components/views/PlanView').then((m) => ({ default: m.PlanView })));
 import { ProjectContextPanel } from './RightSidebarTabs';
 import { SidebarFilesTree } from './SidebarFilesTree';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
@@ -38,11 +45,13 @@ import { invokeDesktopCommand } from '@/lib/desktopNative';
 import {
   EMBEDDED_RUNTIME_BOOTSTRAP_REQUEST,
   EMBEDDED_RUNTIME_BOOTSTRAP_RESPONSE,
+  getActiveEmbeddedSessionChatTab,
   getOrCreateEmbeddedSessionChatURL,
   type EmbeddedSessionChatURLCacheEntry,
   type EmbeddedSessionRuntimeBootstrap,
 } from './contextPanelEmbeddedChat';
 import { getContextSurfaceWidthFraction } from '@/lib/surfaces/registry';
+import { isTerminalEventTarget } from '@/lib/terminalFocus';
 import {
   type PreviewElementMetadata,
   isPreviewElementMetadata,
@@ -158,6 +167,7 @@ const getModeLabel = (
   if (mode === 'chat') return t('contextPanel.mode.chat');
   if (mode === 'file') return t('contextPanel.mode.files');
   if (mode === 'diff') return t('contextPanel.mode.diff');
+  if (mode === 'walkthrough') return t('contextPanel.mode.walkthrough');
   if (mode === 'plan') return t('contextPanel.mode.plan');
   if (mode === 'preview') return t('contextPanel.mode.preview');
   if (mode === 'browser') return t('contextPanel.mode.browser');
@@ -244,7 +254,11 @@ const getTabIcon = (tab: { mode: ContextPanelMode; targetPath: string | null }):
   }
 
   if (tab.mode === 'diff') {
-    return <Icon name="arrow-left-right" className="h-3.5 w-3.5" />;
+    return <DiffViewIcon className="h-3.5 w-3.5" />;
+  }
+
+  if (tab.mode === 'walkthrough') {
+    return <Icon name="route" className="h-3.5 w-3.5" />;
   }
 
   if (tab.mode === 'git') {
@@ -252,7 +266,7 @@ const getTabIcon = (tab: { mode: ContextPanelMode; targetPath: string | null }):
   }
 
   if (tab.mode === 'pr') {
-    return <Icon name="git-pull-request" className="h-3.5 w-3.5" />;
+    return <Icon name="github" className="h-3.5 w-3.5" />;
   }
 
   if (tab.mode === 'notes') {
@@ -2446,6 +2460,13 @@ export const ContextPanel: React.FC = () => {
       return;
     }
 
+    // Terminal owns Escape so the PTY receives it (e.g. Vim Normal mode).
+    // ghostty-web listens in the bubble phase; stopping capture here would
+    // swallow the key before the terminal ever sees it (issue #2644).
+    if (isTerminalEventTarget(event.target)) {
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
     handleClose();
@@ -2463,8 +2484,13 @@ export const ContextPanel: React.FC = () => {
 
   }, [activeTab, directoryKey, setSelectedFilePath]);
 
-  const activeChatTabID = activeTab?.mode === 'chat' ? activeTab.id : null;
-  const activeChatSessionID = activeTab?.mode === 'chat' ? getSessionIDFromDedupeKey(activeTab.dedupeKey) : null;
+  const chatTabs = React.useMemo(
+    () => tabs.filter((tab) => tab.mode === 'chat'),
+    [tabs],
+  );
+  const activeChatTabID = isOpen && activeTab?.mode === 'chat' ? activeTab.id : null;
+  const activeChatSessionID = isOpen && activeTab?.mode === 'chat' ? getSessionIDFromDedupeKey(activeTab.dedupeKey) : null;
+  const activeChatTab = getActiveEmbeddedSessionChatTab(chatTabs, activeChatTabID);
 
   React.useEffect(() => {
     if (!isOpen || !directoryKey || !activeChatSessionID || typeof window === 'undefined') {
@@ -2504,6 +2530,10 @@ export const ContextPanel: React.FC = () => {
       currentTheme,
     });
   }, [currentTheme, darkThemeId, directoryKey, lightThemeId, themeMode]);
+
+  const activeChatSrc = activeChatTab && activeChatSessionID
+    ? getEmbeddedChatSrc(activeChatTab.id, activeChatSessionID, activeChatTab.readOnly)
+    : null;
 
   React.useEffect(() => {
     const liveTabIDs = new Set(tabs.map((tab) => tab.id));
@@ -2684,13 +2714,13 @@ export const ContextPanel: React.FC = () => {
   const activeNonChatContent = activeTab?.mode === 'context'
         ? <ContextPanelContent />
         : activeTab?.mode === 'git'
-            ? <GitView isActive={isOpen} />
+            ? <React.Suspense fallback={null}><GitView isActive={isOpen} /></React.Suspense>
             : activeTab?.mode === 'pr'
                 ? <PullRequestView />
             : activeTab?.mode === 'notes'
                 ? <ProjectContextPanel />
         : activeTab?.mode === 'plan'
-            ? <PlanView targetPath={activeTab.targetPath} />
+            ? <React.Suspense fallback={null}><PlanView targetPath={activeTab.targetPath} /></React.Suspense>
             : activeTab?.mode === 'preview'
                 ? <PreviewPane rawUrl={activeTab.targetPath ?? ''} onNavigate={(url) => openContextPreview(effectiveDirectory, url)} />
                 : (
@@ -2701,10 +2731,6 @@ export const ContextPanel: React.FC = () => {
                   </div>
                 );
 
-  const chatTabs = React.useMemo(
-    () => tabs.filter((tab) => tab.mode === 'chat'),
-    [tabs],
-  );
   const browserTabs = React.useMemo(
     () => tabs.filter((tab) => tab.mode === 'browser'),
     [tabs],
@@ -2715,6 +2741,12 @@ export const ContextPanel: React.FC = () => {
   );
   const hasTerminalTab = React.useMemo(
     () => tabs.some((tab) => tab.mode === 'terminal'),
+    [tabs],
+  );
+  // Keep-alive: the walkthrough holds reading progress and scroll position that
+  // a remount would silently throw away.
+  const hasWalkthroughTab = React.useMemo(
+    () => tabs.some((tab) => tab.mode === 'walkthrough'),
     [tabs],
   );
   const BrowserPane = isElectronBrowserRuntime() ? DesktopBrowserPane : IframeBrowserPane;
@@ -2896,7 +2928,7 @@ export const ContextPanel: React.FC = () => {
           <div className={cn('absolute inset-0 flex', isFileTabActive ? 'flex' : 'hidden')}>
             <div className="h-full min-w-0 flex-1">
               {hasOpenEditorFile ? (
-                <FilesView mode="editor-only" />
+                <React.Suspense fallback={null}><FilesView mode="editor-only" /></React.Suspense>
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
                   <Icon name="file-code" className="h-12 w-12 text-muted-foreground/50" />
@@ -2908,41 +2940,26 @@ export const ContextPanel: React.FC = () => {
             <EditorTreeColumn visible={contextEditorTreeVisible} />
           </div>
         ) : null}
-        {chatTabs.map((tab) => {
-          const sessionID = getSessionIDFromDedupeKey(tab.dedupeKey);
-          if (!sessionID) {
-            return null;
-          }
-
-          const src = getEmbeddedChatSrc(tab.id, sessionID, tab.readOnly);
-          if (!src) {
-            return null;
-          }
-
-          return (
-            <iframe
-              key={tab.id}
-              ref={(node) => {
-                if (!node) {
-                  chatFrameRefs.current.delete(tab.id);
-                  return;
-                }
-                chatFrameRefs.current.set(tab.id, node);
-              }}
-              src={src}
-              title={t('contextPanel.iframe.sessionChatTitle', { sessionID })}
-              className={cn(
-                'absolute inset-0 h-full w-full border-0 bg-background',
-                activeChatTabID === tab.id ? 'block' : 'hidden'
-              )}
-              onLoad={() => {
-                postThemeSyncToEmbeddedChat();
-                postChatSettingsSyncToEmbeddedChat();
-                postEmbeddedVisibilityToChats();
-              }}
-            />
-          );
-        })}
+        {activeChatTab && activeChatSessionID && activeChatSrc ? (
+          <iframe
+            key={activeChatTab.id}
+            ref={(node) => {
+              if (!node) {
+                chatFrameRefs.current.delete(activeChatTab.id);
+                return;
+              }
+              chatFrameRefs.current.set(activeChatTab.id, node);
+            }}
+            src={activeChatSrc}
+            title={t('contextPanel.iframe.sessionChatTitle', { sessionID: activeChatSessionID })}
+            className="absolute inset-0 h-full w-full border-0 bg-background"
+            onLoad={() => {
+              postThemeSyncToEmbeddedChat();
+              postChatSettingsSyncToEmbeddedChat();
+              postEmbeddedVisibilityToChats();
+            }}
+          />
+        ) : null}
         {browserTabs.map((tab) => (
           <div
             key={tab.id}
@@ -2962,16 +2979,18 @@ export const ContextPanel: React.FC = () => {
               activeTab?.id !== tab.id && 'hidden'
             )}
           >
-            <DiffView
-              hideStackedFileSidebar
-              stackedDefaultCollapsedAll
-              pinSelectedFileHeaderToTopOnNavigate
-              showOpenInEditorAction
-              diffScope={tab.diffScope ?? (tab.stagedDiff ? 'staged' : 'working')}
-              onDiffScopeChange={handleDiffScopeChange}
-              targetFilePath={tab.targetPath}
-              flushContent
-            />
+            <React.Suspense fallback={null}>
+              <DiffView
+                hideStackedFileSidebar
+                stackedDefaultCollapsedAll
+                pinSelectedFileHeaderToTopOnNavigate
+                showOpenInEditorAction
+                diffScope={tab.diffScope ?? (tab.stagedDiff ? 'staged' : 'working')}
+                onDiffScopeChange={handleDiffScopeChange}
+                targetFilePath={tab.targetPath}
+                flushContent
+              />
+            </React.Suspense>
           </div>
         ))}
         {hasTerminalTab ? (
@@ -2979,7 +2998,14 @@ export const ContextPanel: React.FC = () => {
             <TerminalView visible={isOpen && activeTab?.mode === 'terminal'} />
           </div>
         ) : null}
-        {activeTab?.mode !== 'chat' && !isFileTabActive && activeTab?.mode !== 'browser' && activeTab?.mode !== 'diff' && activeTab?.mode !== 'terminal' ? activeNonChatContent : null}
+        {hasWalkthroughTab ? (
+          <div className={cn('absolute inset-0', activeTab?.mode === 'walkthrough' ? 'block' : 'hidden')}>
+            <React.Suspense fallback={null}>
+              <WalkthroughView directory={effectiveDirectory} />
+            </React.Suspense>
+          </div>
+        ) : null}
+        {activeTab?.mode !== 'chat' && !isFileTabActive && activeTab?.mode !== 'browser' && activeTab?.mode !== 'diff' && activeTab?.mode !== 'terminal' && activeTab?.mode !== 'walkthrough' ? activeNonChatContent : null}
       </div>
       </div>
     </aside>

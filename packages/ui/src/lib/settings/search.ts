@@ -66,14 +66,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
-    id: 'appearance.window-transparency',
-    page: 'appearance',
-    titleKey: 'settings.openchamber.visual.field.macVibrancy',
-    descriptionKey: 'settings.openchamber.visual.field.macVibrancyHint',
-    keywords: ['transparent', 'transparency', 'vibrancy', 'blur', 'macos', 'opaque'],
-    isAvailable: (ctx) => ctx.isDesktopLocalOrigin,
-  },
-  {
     id: 'appearance.dock-badge',
     page: 'appearance',
     titleKey: 'settings.openchamber.visual.field.dockBadge',
@@ -379,6 +371,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['small model', 'utility', 'summary', 'recap', 'cheap', 'override'],
   },
   {
+    id: 'sessions.walkthrough-model',
+    page: 'sessions',
+    titleKey: 'settings.openchamber.defaults.walkthroughModel.title',
+    descriptionKey: 'settings.openchamber.defaults.walkthroughModel.description',
+    keywords: ['walkthrough', 'diff', 'review', 'changes', 'structured output', 'model', 'override'],
+  },
+  {
     id: 'sessions.auto-cleanup',
     page: 'sessions',
     titleKey: 'settings.openchamber.sessionRetention.field.enableAutoCleanup',
@@ -514,11 +513,11 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['ignored', 'files', 'gitignore'],
   },
   {
-    id: 'usage.header-menu',
+    id: 'usage.work-status-panel',
     page: 'usage',
-    titleKey: 'settings.usage.page.options.showInHeader',
-    descriptionKey: 'settings.usage.page.options.showInHeaderTooltip',
-    keywords: ['quota', 'header', 'dropdown'],
+    titleKey: 'settings.usage.page.options.showInWorkStatus',
+    descriptionKey: 'settings.usage.page.options.showInWorkStatusTooltip',
+    keywords: ['quota', 'work', 'status', 'panel'],
   },
   {
     id: 'usage.model-quotas',
@@ -753,6 +752,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'providers',
     titleKey: 'settings.providers.page.connect.title',
     keywords: ['add provider', 'connect provider', 'credentials'],
+  },
+  {
+    id: 'providers.custom',
+    page: 'providers',
+    titleKey: 'settings.providers.page.custom.title',
+    descriptionKey: 'settings.providers.page.custom.description',
+    keywords: ['other', 'custom', 'openai-compatible', 'base url', 'api key'],
   },
   {
     id: 'providers.auth',

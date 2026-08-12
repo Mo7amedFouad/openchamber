@@ -14,7 +14,7 @@ import { isWindowsArm64 } from '@/lib/platform';
 
 export type MainTab = 'chat' | 'plan' | 'git' | 'diff' | 'terminal' | 'files' | 'context' | 'diagram';
 export type PendingDiffScope = 'working' | 'staged' | 'turn';
-export type ContextPanelMode = 'diff' | 'file' | 'context' | 'plan' | 'chat' | 'preview' | 'browser' | 'git' | 'pr' | 'notes' | 'terminal';
+export type ContextPanelMode = 'diff' | 'walkthrough' | 'file' | 'context' | 'plan' | 'chat' | 'preview' | 'browser' | 'git' | 'pr' | 'notes' | 'terminal';
 export type MermaidRenderingMode = 'svg' | 'ascii';
 export type UserMessageRenderingMode = 'markdown' | 'plain';
 export type ChatRenderMode = 'sorted' | 'live';
@@ -288,7 +288,7 @@ const sanitizeContextPanelTabs = (tabs: unknown): ContextPanelTab[] => {
       touchedAt?: unknown;
     };
 
-    if (candidate.mode !== 'diff' && candidate.mode !== 'file' && candidate.mode !== 'context' && candidate.mode !== 'plan' && candidate.mode !== 'chat' && candidate.mode !== 'preview' && candidate.mode !== 'browser' && candidate.mode !== 'git' && candidate.mode !== 'pr' && candidate.mode !== 'notes' && candidate.mode !== 'terminal') {
+    if (candidate.mode !== 'diff' && candidate.mode !== 'walkthrough' && candidate.mode !== 'file' && candidate.mode !== 'context' && candidate.mode !== 'plan' && candidate.mode !== 'chat' && candidate.mode !== 'preview' && candidate.mode !== 'browser' && candidate.mode !== 'git' && candidate.mode !== 'pr' && candidate.mode !== 'notes' && candidate.mode !== 'terminal') {
       continue;
     }
 
@@ -578,6 +578,33 @@ interface UIStore {
   contextEditorTreeWidth: number;
   notesPanelHeight: number;
   todoPanelHeight: number;
+  /** Expanded collapsible sections of the in-chat work-status panel, by id. */
+  workStatusExpandedSections: Record<string, boolean>;
+  /** Scroll offset of that panel, so it survives being unmounted. */
+  workStatusScrollTop: number;
+  /** Whether the in-chat work-status panel may render at all. */
+  workStatusPanelEnabled: boolean;
+  /**
+   * Whether it is actually on screen right now — the switch can be on while
+   * layout still refuses it (narrow chat, open context panel). Transient, never
+   * persisted: it describes the current frame, not a preference. The header
+   * reads it to stop repeating what the panel already shows.
+   */
+  workStatusPanelVisible: boolean;
+  /** Layout can host the panel inline. Transient, like the one above. */
+  workStatusPanelFits: boolean;
+  /**
+   * Shown over the chat because it does not fit beside it. Transient and never
+   * persisted: it is a response to the current window, not a preference, and
+   * the panel returns to its place as soon as there is room.
+   */
+  workStatusOverlayOpen: boolean;
+  /**
+   * Sections the user switched off. Hidden rather than visible ones are
+   * stored, so a section added later appears without touching saved settings.
+   * Persisted to server settings, not just this browser.
+   */
+  workStatusHiddenSections: string[];
   isSessionSwitcherOpen: boolean;
   isSessionDropdownOpen: boolean;
   activeMainTab: MainTab;
@@ -621,6 +648,8 @@ interface UIStore {
   chatRenderMode: ChatRenderMode;
   activityRenderMode: ActivityRenderMode;
   showDeletionDialog: boolean;
+  /** When true, confirm before applying deferred OpenCode restart from Settings. */
+  showOpenCodeRestartConfirm: boolean;
   autoDeleteEnabled: boolean;
   /** Global file-editor autosave. Default true for backward compatibility. */
   autoSaveEnabled: boolean;
@@ -654,6 +683,8 @@ interface UIStore {
   diffLayoutPreference: 'dynamic' | 'inline' | 'side-by-side';
   diffFileLayout: Record<string, 'inline' | 'side-by-side'>;
   diffWrapLines: boolean;
+  /** Width of the walkthrough table of contents, in pixels. */
+  walkthroughTocWidth: number;
   gitChangesViewMode: 'flat' | 'tree';
   isTimelineDialogOpen: boolean;
   isPromptNavigatorPanelOpen: boolean;
@@ -735,6 +766,14 @@ interface UIStore {
   toggleContextPanelExpanded: (directory: string) => void;
   setContextPanelWidth: (directory: string, mode: ContextPanelMode, width: number) => void;
   setNotesPanelHeight: (height: number) => void;
+  setWorkStatusSectionExpanded: (sectionId: string, expanded: boolean) => void;
+  setWorkStatusScrollTop: (scrollTop: number) => void;
+  setWorkStatusPanelEnabled: (enabled: boolean) => void;
+  setWorkStatusPanelVisible: (visible: boolean) => void;
+  setWorkStatusPanelFits: (fits: boolean) => void;
+  setWorkStatusOverlayOpen: (open: boolean) => void;
+  setWorkStatusSectionVisible: (sectionId: string, visible: boolean) => void;
+  setWorkStatusHiddenSections: (sectionIds: string[]) => void;
   setTodoPanelHeight: (height: number) => void;
   setSessionSwitcherOpen: (open: boolean) => void;
   setSessionDropdownOpen: (open: boolean) => void;
@@ -783,6 +822,7 @@ interface UIStore {
   setChatRenderMode: (value: ChatRenderMode) => void;
   setActivityRenderMode: (value: ActivityRenderMode) => void;
   setShowDeletionDialog: (value: boolean) => void;
+  setShowOpenCodeRestartConfirm: (value: boolean) => void;
   setAutoDeleteEnabled: (value: boolean) => void;
   setAutoSaveEnabled: (value: boolean) => void;
   setAutoDeleteAfterDays: (days: number) => void;
@@ -825,6 +865,7 @@ interface UIStore {
   setDiffLayoutPreference: (mode: 'dynamic' | 'inline' | 'side-by-side') => void;
   setDiffFileLayout: (filePath: string, mode: 'inline' | 'side-by-side') => void;
   setDiffWrapLines: (wrap: boolean) => void;
+  setWalkthroughTocWidth: (width: number) => void;
   setGitChangesViewMode: (mode: 'flat' | 'tree') => void;
   setMultiRunLauncherOpen: (open: boolean) => void;
   setTimelineDialogOpen: (open: boolean) => void;
@@ -839,7 +880,9 @@ interface UIStore {
   setNotifyOnCompletion: (value: boolean) => void;
   setNotifyOnError: (value: boolean) => void;
   setNotifyOnQuestion: (value: boolean) => void;
-  setNotificationTemplates: (templates: UIStore['notificationTemplates']) => void;
+  setNotificationTemplates: (
+    templates: UIStore['notificationTemplates'] | ((current: UIStore['notificationTemplates']) => UIStore['notificationTemplates']),
+  ) => void;
   setSummarizeLastMessage: (value: boolean) => void;
   setSummaryThreshold: (value: number) => void;
   setSummaryLength: (value: number) => void;
@@ -896,6 +939,13 @@ export const useUIStore = create<UIStore>()(
         contextEditorTreeVisible: true,
         contextEditorTreeWidth: 240,
         notesPanelHeight: 112,
+        workStatusExpandedSections: {},
+        workStatusScrollTop: 0,
+        workStatusPanelEnabled: true,
+        workStatusPanelVisible: false,
+        workStatusPanelFits: false,
+        workStatusOverlayOpen: false,
+        workStatusHiddenSections: [],
         todoPanelHeight: 259,
         isSessionSwitcherOpen: false,
         isSessionDropdownOpen: false,
@@ -938,6 +988,7 @@ export const useUIStore = create<UIStore>()(
         chatRenderMode: 'live',
         activityRenderMode: 'summary',
         showDeletionDialog: true,
+        showOpenCodeRestartConfirm: true,
         autoDeleteEnabled: false,
         autoSaveEnabled: true,
         autoDeleteAfterDays: 30,
@@ -966,6 +1017,7 @@ export const useUIStore = create<UIStore>()(
         diffLayoutPreference: 'inline',
         diffFileLayout: {},
         diffWrapLines: false,
+        walkthroughTocWidth: 224,
         gitChangesViewMode: 'flat',
         isTimelineDialogOpen: false,
         isPromptNavigatorPanelOpen: false,
@@ -1428,6 +1480,63 @@ export const useUIStore = create<UIStore>()(
           set({ notesPanelHeight: height });
         },
 
+        setWorkStatusSectionExpanded: (sectionId, expanded) => {
+          set((state) => (
+            state.workStatusExpandedSections[sectionId] === expanded
+              ? state
+              : {
+                workStatusExpandedSections: {
+                  ...state.workStatusExpandedSections,
+                  [sectionId]: expanded,
+                },
+              }
+          ));
+        },
+
+        setWorkStatusScrollTop: (scrollTop) => {
+          set({ workStatusScrollTop: Math.max(0, scrollTop) });
+        },
+
+        setWorkStatusPanelEnabled: (enabled) => {
+          set({ workStatusPanelEnabled: enabled });
+        },
+
+        setWorkStatusPanelVisible: (visible) => {
+          set((state) => (state.workStatusPanelVisible === visible ? state : { workStatusPanelVisible: visible }));
+        },
+
+        setWorkStatusPanelFits: (fits) => {
+          set((state) => {
+            if (state.workStatusPanelFits === fits) return state;
+            // Room again: the panel goes back to its place, so an overlay left
+            // open would duplicate it.
+            return fits
+              ? { workStatusPanelFits: true, workStatusOverlayOpen: false }
+              : { workStatusPanelFits: false };
+          });
+        },
+
+        setWorkStatusOverlayOpen: (open) => {
+          set((state) => (state.workStatusOverlayOpen === open ? state : { workStatusOverlayOpen: open }));
+        },
+
+        setWorkStatusSectionVisible: (sectionId, visible) => {
+          set((state) => {
+            const hidden = state.workStatusHiddenSections;
+            const isHidden = hidden.includes(sectionId);
+            if (visible === !isHidden) return state;
+            return {
+              workStatusHiddenSections: visible
+                ? hidden.filter((entry) => entry !== sectionId)
+                : [...hidden, sectionId],
+            };
+          });
+        },
+
+        setWorkStatusHiddenSections: (sectionIds) => {
+          set({ workStatusHiddenSections: [...new Set(sectionIds)] });
+        },
+
         setTodoPanelHeight: (height) => {
           set({ todoPanelHeight: height });
         },
@@ -1674,6 +1783,10 @@ export const useUIStore = create<UIStore>()(
           set({ showDeletionDialog: value });
         },
 
+        setShowOpenCodeRestartConfirm: (value) => {
+          set({ showOpenCodeRestartConfirm: value });
+        },
+
         setAutoDeleteEnabled: (value) => {
           set({ autoDeleteEnabled: value });
         },
@@ -1826,6 +1939,10 @@ export const useUIStore = create<UIStore>()(
 
         setDiffWrapLines: (wrap) => {
           set({ diffWrapLines: wrap });
+        },
+
+        setWalkthroughTocWidth: (width) => {
+          set({ walkthroughTocWidth: Math.round(width) });
         },
 
         setGitChangesViewMode: (mode) => {
@@ -2127,7 +2244,13 @@ export const useUIStore = create<UIStore>()(
         setNotifyOnCompletion: (value) => { set({ notifyOnCompletion: value }); },
         setNotifyOnError: (value) => { set({ notifyOnError: value }); },
         setNotifyOnQuestion: (value) => { set({ notifyOnQuestion: value }); },
-        setNotificationTemplates: (templates) => { set({ notificationTemplates: templates }); },
+        setNotificationTemplates: (templates) => {
+          set((state) => ({
+            notificationTemplates: typeof templates === 'function'
+              ? templates(state.notificationTemplates)
+              : templates,
+          }));
+        },
         setSummarizeLastMessage: (value) => { set({ summarizeLastMessage: value }); },
         setSummaryThreshold: (value) => { set({ summaryThreshold: value }); },
         setSummaryLength: (value) => { set({ summaryLength: value }); },
@@ -2290,6 +2413,18 @@ export const useUIStore = create<UIStore>()(
 
           // v8 -> v9: initialize notes/todo panel height fields
           if (version < 9) {
+            if (!state.workStatusExpandedSections || typeof state.workStatusExpandedSections !== 'object') {
+              state.workStatusExpandedSections = {};
+            }
+            if (typeof state.workStatusScrollTop !== 'number' || !Number.isFinite(state.workStatusScrollTop)) {
+              state.workStatusScrollTop = 0;
+            }
+            if (typeof state.workStatusPanelEnabled !== 'boolean') {
+              state.workStatusPanelEnabled = true;
+            }
+            if (!Array.isArray(state.workStatusHiddenSections)) {
+              state.workStatusHiddenSections = [];
+            }
             if (typeof state.notesPanelHeight !== 'number' || !Number.isFinite(state.notesPanelHeight)) {
               state.notesPanelHeight = 112;
             }
@@ -2389,6 +2524,10 @@ export const useUIStore = create<UIStore>()(
           contextEditorTreeVisible: state.contextEditorTreeVisible,
           contextEditorTreeWidth: state.contextEditorTreeWidth,
           notesPanelHeight: state.notesPanelHeight,
+          workStatusExpandedSections: state.workStatusExpandedSections,
+          workStatusScrollTop: state.workStatusScrollTop,
+          workStatusPanelEnabled: state.workStatusPanelEnabled,
+          workStatusHiddenSections: state.workStatusHiddenSections,
           todoPanelHeight: state.todoPanelHeight,
           isSessionSwitcherOpen: state.isSessionSwitcherOpen,
           activeMainTab: state.activeMainTab,
@@ -2409,6 +2548,7 @@ export const useUIStore = create<UIStore>()(
           chatRenderMode: state.chatRenderMode,
           activityRenderMode: state.activityRenderMode,
           showDeletionDialog: state.showDeletionDialog,
+          showOpenCodeRestartConfirm: state.showOpenCodeRestartConfirm,
           autoDeleteEnabled: state.autoDeleteEnabled,
           autoSaveEnabled: state.autoSaveEnabled,
           autoDeleteAfterDays: state.autoDeleteAfterDays,
@@ -2434,6 +2574,7 @@ export const useUIStore = create<UIStore>()(
           recentEfforts: state.recentEfforts,
           diffLayoutPreference: state.diffLayoutPreference,
           diffWrapLines: state.diffWrapLines,
+          walkthroughTocWidth: state.walkthroughTocWidth,
           gitChangesViewMode: state.gitChangesViewMode,
           nativeNotificationsEnabled: state.nativeNotificationsEnabled,
           notificationMode: state.notificationMode,
