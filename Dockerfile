@@ -17,6 +17,10 @@ RUN bun install --frozen-lockfile --ignore-scripts
 FROM deps AS builder
 WORKDIR /app
 COPY . .
+# `deps` installs with --ignore-scripts, so the root postinstall never runs there
+# and the patches/ directory is not present yet. Apply patch-package here, after
+# the full source copy, so the web bundle ships the patched ghostty-web.
+RUN bunx patch-package
 RUN bun run build:web
 
 FROM oven/bun:1.3.14 AS runtime
@@ -176,6 +180,9 @@ RUN npm config set prefix /home/openchamber/.npm-global && mkdir -p /home/opench
 COPY --from=cloudflare/cloudflared@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 
 ENV NODE_ENV=production
+# The base image ships with the POSIX locale, which makes bash readline treat
+# every byte of a multibyte character separately in the built-in terminal.
+ENV LANG=C.UTF-8
 
 COPY scripts/docker-entrypoint.sh /home/openchamber/openchamber-entrypoint.sh
 
