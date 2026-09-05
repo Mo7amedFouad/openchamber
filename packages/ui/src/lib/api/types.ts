@@ -1,5 +1,6 @@
 import type { WorktreeMetadata } from '@/types/worktree';
 import type { DraftStarterRef } from '@/lib/draftStarters';
+import type { InputHistoryScope } from '@/lib/inputHistoryScope';
 
 type RuntimePlatform = 'web' | 'desktop' | 'vscode';
 
@@ -112,7 +113,7 @@ export interface TerminalServerSession {
 
 export interface TerminalAPI {
   listShells?(): Promise<TerminalShellOption[]>;
-  /** Server-side sessions for a working directory; absent on runtimes without a server terminal list. */
+  /** Server-side sessions for a working directory, or all directories when cwd is empty; absent on runtimes without a server terminal list. */
   listSessions?(cwd: string): Promise<TerminalServerSession[]>;
   /** Marks the sessions as active so the server's idle sweep does not reap terminals an open client still shows. */
   touchSessions?(sessionIds: string[]): Promise<void>;
@@ -406,6 +407,8 @@ export interface GitWorktreeInfo {
   name: string;
   branch: string;
   path: string;
+  /** git still registers the worktree, but its directory is gone (deleted outside git). */
+  prunable?: boolean;
 }
 
 export interface GitWorktreeValidationError {
@@ -655,6 +658,7 @@ interface FileReadOptions {
   outsideFileGrant?: string;
   optional?: boolean;
   directory?: string;
+  fresh?: boolean;
 }
 
 export interface FilesAPI {
@@ -721,8 +725,12 @@ export interface SettingsPayload {
   sessionRetentionAction?: 'archive' | 'delete';
   followUpBehavior?: 'steer' | 'queue';
   queueModeEnabled?: boolean;
+  inputHistoryScope?: InputHistoryScope;
+  inputHistoryLimit?: number;
   gitmojiEnabled?: boolean;
   inputSpellcheckEnabled?: boolean;
+  enterToSend?: boolean;
+  enterToSendConfigured?: boolean;
   showOpenCodeUpdateNotifications?: boolean;
   openCodeUpdateToastDismissedVersion?: string;
   showToolFileIcons?: boolean;
@@ -748,6 +756,7 @@ export interface SettingsPayload {
   shortcutOverrides?: Record<string, string>;
   diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side';
   gitChangesViewMode?: 'flat' | 'tree';
+  toolJsonViewMode?: 'summary' | 'formatted' | 'raw';
   directoryShowHidden?: boolean;
   filesViewShowGitignored?: boolean;
   openInAppId?: string;

@@ -100,6 +100,10 @@ Persisted session todos use a bounded composite key of runtime, normalized direc
 
 Chat composer drafts, confirmed mentions, inline-comment drafts, and pinned sessions use the same runtime/directory/session ownership rule. Chat drafts use a bounded shared envelope and notify mounted composers when authoritative deletion clears their identity, preventing unmount autosave from resurrecting deleted text. Inline drafts enforce per-session, global-session, and serialized-byte bounds. Pins retain every valid composite key across runtimes without silent age/count eviction and are never pruned from the first startup list. Confirmed local deletion and routed deletion events clear immediately; after an authoritative baseline exists, a later complete omission also cleans persisted state. Ambiguous session-only legacy drafts and pins are not claimed.
 
+Input history keeps both runtime-wide and runtime/directory/session buckets in one bounded browser-storage envelope. The per-bucket cap is configurable from 1 through 100 and defaults to 40. Recall defaults to the current session's bucket merged with the visible transcript's user prompts; the runtime-wide bucket is opt-in through the Chat setting. Lowering the limit trims older entries from every bucket at once and cannot restore what it discards. Every scope change, limit change, append, and session cleanup rereads the latest durable envelope before applying its mutation, so a stale tab preserves history written by another tab. A failed write retains bounded before/after snapshots. The next mutation applies that local delta to the latest durable data, preserving pending appends and session deletions together with unrelated changes from other tabs. A successful durable write clears the pending delta.
+
+Server-owned queue acceptance records the original prompt and restorable attachments against its captured runtime/directory/session identity. Rejection records nothing. Automatic delivery and manual take do not record the accepted item again. VS Code retains recording at dispatch, using the full messages actually taken for sending.
+
 Composer draft edits remain immediate in memory and use a trailing durable-write debounce. Pending text and confirmed mentions flush synchronously when the document becomes hidden, freezes, receives `pagehide`, switches identity, or unmounts; authoritative deletion cancels pending work before any lifecycle flush can run. The shared chat-draft envelope reuses its parsed snapshot until the storage value changes. Inline-comment draft byte accounting indexes serialized buckets and recalculates only the changed session bucket during normal edits; deferred storage still performs the final full-envelope serialization and lifecycle flush.
 
 ### `useTerminalStore.ts`
@@ -115,6 +119,10 @@ run monitor, and made Zustand persist rewrite the session-storage snapshot per c
 
 Invariants to preserve when editing:
 
+- Directory keys come from `normalizeTerminalDirectory` (`lib/pathNormalization.ts`) and
+  nothing else. Server `cwd` strings, sidebar project paths and the panel's own directory
+  all pass through it, so a folder has exactly one entry on every platform. Read `sessions`
+  through `getDirectoryState`, never by indexing the map with a path normalized elsewhere.
 - Output actions (`appendToBuffer`, `replaceBuffer`) must leave `sessions` referentially
   unchanged; only `buffers` and `nextChunkId` may change.
 - Buffer entries are owned by their tab. `closeTab`, `removeDirectory`, `clearAll`, and
@@ -130,10 +138,13 @@ Invariants to preserve when editing:
 - Reconciliation selects one record per action before updating tabs. A running execution wins
   over retained exited records independently of listing order. An in-progress stop remains
   stopping until the same execution exits or explicit termination failure restores running.
-- `terminalSessionObserver` shares one five-second refresh loop per terminal adapter and
-  demanded directory. Only visible, online headers/panels demand refreshes; focus and online
-  recovery refresh immediately. Failed reads preserve state, the last consumer stops the loop,
-  and responses from a replaced runtime cannot publish into the new runtime.
+- `terminalSessionObserver` shares one five-second refresh loop per terminal adapter across
+  the visible sidebar, headers and panels. The existing empty-cwd listing returns all server
+  sessions in one request; directory subscribers receive only their own records. A sidebar
+  subscriber reconciles the complete list, including omitted known action directories.
+  Focus and online recovery refresh immediately. Hidden/offline clients pause, failed reads
+  preserve state, and the last consumer stops the loop. Replaced runtimes cannot publish old
+  responses. Mutation revisions are captured for every subscribed scope before the request.
 - Passive action adoption may restore output but has no launch-time authority to open browser
   tabs. Preview navigation belongs to the initiating host directory even for a parent action.
 - Server session listings capture the directory's per-action mutation revisions when the
