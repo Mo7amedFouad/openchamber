@@ -52,7 +52,7 @@ So:
 | `viewport-store.ts` | Scroll anchors, session memory, loading indicators | App UI state |
 | `attachment-files.ts` | Attachment picker allowlists, MIME/content validation, structured-text sanitization, and HEIC conversion | Local chat attachments across shared UI runtimes |
 | `document-attachments.ts` | Bounded Office/OpenDocument extraction, document text serialization, embedded-image extraction, and positional citations | DOCX, PPTX, XLSX, ODT, ODP, and ODS chat attachments |
-| `input-store.ts` | Draft input state, attached files, synthetic parts, destination-scoped fork replay handoff | App UI state; fork replay targets runtime + directory + session |
+| `input-store.ts` | Draft input state, attached files, synthetic parts, pending guest attach, destination-scoped fork replay handoff | App UI state; fork replay targets runtime + directory + session |
 | `selection-store.ts` | Model/agent/variant selections | App UI state |
 | `voice-store.ts` | Voice state | App UI state |
 
@@ -175,6 +175,10 @@ deletion, persisted-state cleanup and runtime guards. Settings shares the run
 state and shows loading or fetch failure separately from an eligible count.
 
 ### Live cross-directory session/status view
+
+Extension session subscriptions project these same stores through `lib/guests/workspace.ts`; they own no poller or git discovery. `global-session-status.observedById` retains explicit live activity/outcomes for at most 2,000 sessions in memory. A status snapshot can establish current activity but does not manufacture a successful turn. An error followed by idle retains its failed outcome until another run starts; runtime reset clears observations. Extension task status remains extension-owned.
+
+The session creation action accepts `navigation: "preserve"` for background extension launches. It still registers the returned directory, initializes message loading, marks the session as OpenChamber-created, and updates the global cache, but never selects it. Explicit guest `openSession` performs selection later. `session-ui-store.worktreeDiscoveryByProject` publishes topology loading/ready/error separately from retained worktree records; the existing sidebar discovery and control-event refresh own these flags.
 
 Use the sync hooks backed by aggregated child stores when the UI needs **live truth** for sessions or statuses across all initialized directories.
 
@@ -605,6 +609,16 @@ while the reader sits on the end of a session that is not producing output,
 content growth re-pins with one instant write; output growth belongs to the
 follow logic, which glides only while the session is working.
 
+`useChatTimelineScroll` retires an outgoing scroll container through
+`components/chat/lib/scroll/retireScrollContent.ts`. Chromium can retain a
+queued scroll event's target while animation frames are suspended, keeping its
+detached conversation tree alive. After React's commit and Markdown DOM-cache
+capture, a microtask clears the retired container's remaining children. The
+cleanup requires both a disconnected node and released ownership, so ref
+reattachment, Strict Mode and connected hidden views keep their contents.
+Nodes already transferred to the Markdown cache remain intact. This shared
+cleanup runs independently of animation frames across all chat runtimes.
+
 `bun run profile:switch` measures both moments; see `scripts/perf/DOCUMENTATION.md`.
 
 Select leaf values, not containers:
@@ -633,7 +647,7 @@ The optimization multiplies with targeted event cloning: fewer new references pe
 |-------|------|-----------------|
 | `session-ui-store.ts` | Session selection, draft lifecycle, abort, worktree, SDK actions | Session switch, draft open/close |
 | `voice-store.ts` | Voice connection/activity state | Voice toggle |
-| `input-store.ts` | Pending input text, synthetic parts, attached files | User typing, file attach, revert/fork |
+| `input-store.ts` | Pending input text, synthetic parts, attached files, pending guest attach | User typing, file attach, revert/fork, guest chip |
 | `selection-store.ts` | Per-session model/agent/variant choices | Model/agent picker |
 | `viewport-store.ts` | Scroll anchors, session memory state, sync status | Streaming, scroll, session switch |
 
