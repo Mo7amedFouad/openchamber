@@ -104,6 +104,7 @@ message history so a reload cannot undo an unsent picker change.
 - A system-resume signal, including Capacitor foreground resume, refreshes pending questions and permissions only for the active materialized directory. The refresh is deduplicated while in flight, preserves existing state on fetch failure, and leaves unopened directories untouched; normal stream reconnect recovery remains the broader catch-up path.
 - When a materialized current turn contains a pending/running question tool but that session's pending question record is missing, the mounted chat performs a question-only recovery scoped to that session. It tries at most three times with delays of 0, 500, and 1,500 ms, stops when the chat unmounts or changes sessions, and guards every attempt against runtime changes. This closes cold-start races without adding requests to ordinary session opens or scanning unrelated sessions and directories.
 - A mounted directory-store consumer pins that store for its lifetime. Eviction may dispose only unmounted directories, so optimistic actions and realtime events cannot move to a replacement store while visible React consumers remain subscribed to an older identity.
+- Selected, active-project, expanded, and visible bootstrap demand also protects a store from eviction. This keeps virtualized off-screen directories alive while their owner still needs them; background demand remains evictable so the complete known topology does not make the cache unbounded.
 - Reconfiguration and runtime switching invalidate stale generations. A stale completion must not publish state into the new runtime.
 - Failure is recorded as `failed`; it is not converted into a successful empty snapshot. Forced demand can retry failed or completed work.
 - A failed bootstrap is classified as `os-permission` only when the owning runtime filesystem API independently confirms `EPERM`/`EACCES` for that exact directory. OpenCode/proxy error text is never used as permission evidence. The scheduler retains the directory-scoped reason so local Desktop can offer native folder selection before a forced retry.
@@ -248,6 +249,10 @@ This keeps cold/global lists responsive without requiring a refetch after every 
 
 Live activity/status indicators must not depend on this cache. They must use the event/snapshot-reconciled global live status index.
 
+### Viewed sessions and surface attention
+
+A `session.idle` or `session.error` for the selected session is recorded as viewed only while the user can see this surface; otherwise it raises an unread marker. `lib/surfaceAttention.ts` owns that answer. Web, desktop, and mobile use document focus; on web and desktop, `App.tsx` also marks the selected session viewed when the window regains focus. A VS Code webview document's focus does not track what the user sees: it loses focus whenever the code editor takes it while the chat stays on screen, and it can keep focus while VS Code is in the background. There the extension host reports window focus and webview visibility (`viewerStateChanged`); once a report arrives it replaces document focus, and `VSCodeApp` marks the selected session viewed whenever a report says the webview is seen again.
+
 ## Session message loading
 
 The event pipeline's reconnect callback carries `replayReset`. A global WS
@@ -308,6 +313,8 @@ The profiler also emits a user-timing mark when pending global-session recency i
 Streaming assistant and reasoning text is throttled once before reaching the markdown renderer. The renderer incrementally reconciles changed markdown blocks but does not add a second character-pacing timer, which would multiply parse/morph work while catching up on large streamed chunks.
 
 The event pipeline delivers each ordered per-directory flush as one reducer batch. Events retain their individual notifications, cleanup, routing, materialization, and debug side effects, while directory mutations accumulate in order and publish one store transaction per touched directory. Global session mutations and live status, ordering, and timing transitions also accumulate in event order and each owner publishes at most once for the flush. Each top-level state slice is cloned lazily at most once in that batch; no-op events do not change references.
+
+A sustained stream is flushed at most every 100ms (`FLUSH_FRAME_MS`); the first event after a quiet spell is flushed at once, so a lone permission or status event is never held back. The interval matches the 100ms at which streamed text is shown: each flush publishes the directory store and re-renders the streaming message, so a shorter interval pays for renders that change nothing on screen. Measure with `bun run profile:session` against the fixture provider before changing it.
 
 Streaming lifecycle derivation has two paths. Directory attach, switch, bootstrap, and reconnect may perform a full reconciliation. Normal store publications reconcile only sessions whose `session_status` or `message` bucket changed; part-only events update the affected streaming message heartbeat directly and must not rescan all busy sessions.
 
