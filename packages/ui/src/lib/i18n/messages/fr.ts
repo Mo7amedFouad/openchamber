@@ -1,6 +1,7 @@
 import { settingsDict } from './fr.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict = {
@@ -30,6 +31,7 @@ export const dict = {
   ...settingsDict,
   ...linearIssuePickerI18n.fr,
   ...linearPanelI18n.fr,
+  ...routingI18n.fr,
   ...pluginPanelI18n.fr,
   'terminalView.actions.attachSelection': 'Joindre la sortie sélectionnée',
   'terminalView.actions.copySelection': 'Copier la sortie sélectionnée',
@@ -254,6 +256,7 @@ export const dict = {
   'multirun.launcher.models.info': 'Sélectionnez 2 modèles ou plus. Le même modèle peut être ajouté plusieurs fois.',
   'multirun.launcher.toast.fileTooLarge': 'Le fichier "{fileName}" est trop volumineux (max 10 Mo)',
   'multirun.launcher.toast.attachFailed': 'Échec de la connexion de "{fileName}"',
+  'multirun.launcher.toast.partialFailure': 'Certaines sessions n’ont pas pu être créées. Échecs : {failed}.',
   'multirun.launcher.toast.attachedSingle': 'Fichier {count} joint',
   'multirun.launcher.toast.attachedPlural': 'Fichiers {count} joints',
   'multirun.modelMultiSelect.actions.addModel': 'Ajouter un modèle',
@@ -455,6 +458,7 @@ export const dict = {
   'sessions.sidebar.session.status.permissionRequired': 'Autorisation requise',
   'sessions.sidebar.session.status.questionPendingSingle': '1 question en attente',
   'sessions.sidebar.session.status.questionPendingMany': '{count} questions en attente',
+  'sessions.sidebar.session.status.questionPending': 'Question en attente',
   'sessions.sidebar.session.status.activeFor': 'Active depuis {duration}',
   'sessions.sidebar.session.status.lastTurnDuration': 'Le dernier tour a duré {duration}',
   'sessions.sidebar.session.subsessions.collapse': 'Réduire les sous-sessions',
@@ -1390,6 +1394,8 @@ export const dict = {
   'diffView.unavailable.missingDescription': 'Il a été supprimé après le chargement de la liste des modifications. La liste est en cours d’actualisation.',
   'diffView.unavailable.nestedRepositoryTitle': 'Dépôt Git distinct',
   'diffView.unavailable.nestedRepositoryDescription': 'Ce dossier a son propre historique Git. Ouvrez-le comme projet pour voir ses modifications.',
+  'diffView.unavailable.untrackedDirectoryTitle': 'Dossier de nouveaux fichiers',
+  'diffView.unavailable.untrackedDirectoryDescription': 'Ce dossier contient trop de nouveaux fichiers pour les lister un par un. Indexez-le ou ajoutez-le à .gitignore s’il n’a pas sa place dans le dépôt.',
   'diffView.submodule.title': 'Sous-module',
   'diffView.submodule.commitChanged': 'Commit {from} → {to}',
   'diffView.submodule.commitUnchanged': 'Toujours sur le commit {commit}',
@@ -2153,6 +2159,7 @@ export const dict = {
   'chat.chatInput.toast.someFilesSkipped': 'Certains fichiers ont été ignorés :\n{summary}',
   'chat.chatInput.toast.vscodePickFailed': 'Échec de la sélection des fichiers dans VS Code',
   'chat.chatInput.toast.openSessionFirst': 'Ouvrir d\'abord une session',
+  'chat.chatInput.toast.dictationKeptForOriginalSession': 'Dictée enregistrée comme brouillon dans la session où vous l\'avez démarrée',
   'chat.chatInput.toast.togglePermissionAutoAcceptFailed': 'Échec de l\'activation de l\'acceptation automatique des autorisations',
   'chat.chatInput.reviewComments': 'Commentaires de révision :',
   'chat.chatInput.previewAnnotations': 'Aperçu des annotations :',

@@ -2,6 +2,7 @@ import type { I18nKey } from './en';
 import { settingsDict } from './pl.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict: Record<I18nKey, string> = {
@@ -31,6 +32,7 @@ export const dict: Record<I18nKey, string> = {
   ...settingsDict,
   ...linearIssuePickerI18n.pl,
   ...linearPanelI18n.pl,
+  ...routingI18n.pl,
   ...pluginPanelI18n.pl,
   'terminalView.actions.attachSelection': 'Dołącz zaznaczone dane wyjściowe',
   'terminalView.actions.copySelection': 'Kopiuj zaznaczone dane wyjściowe',
@@ -585,6 +587,7 @@ export const dict: Record<I18nKey, string> = {
   'multirun.launcher.models.info': 'Wybierz 2 lub więcej modeli. Ten sam model może być dodany wielokrotnie.',
   'multirun.launcher.toast.fileTooLarge': 'Plik "{fileName}" jest zbyt duży (max 10MB)',
   'multirun.launcher.toast.attachFailed': 'Nie udało się dołączyć "{fileName}"',
+  'multirun.launcher.toast.partialFailure': 'Nie udało się utworzyć części sesji. Liczba niepowodzeń: {failed}.',
   'multirun.launcher.toast.attachedSingle': 'Dołączono {count} plik',
   'multirun.launcher.toast.attachedPlural': 'Dołączono {count} plików',
   'multirun.modelMultiSelect.actions.addModel': 'Dodaj model',
@@ -627,6 +630,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.status.permissionRequired': 'Wymagane uprawnienie',
   'sessions.sidebar.session.status.questionPendingSingle': '1 oczekujące pytanie',
   'sessions.sidebar.session.status.questionPendingMany': 'Liczba oczekujących pytań: {count}',
+  'sessions.sidebar.session.status.questionPending': 'Oczekujące pytanie',
   'sessions.sidebar.session.status.activeFor': 'Aktywna od {duration}',
   'sessions.sidebar.session.status.lastTurnDuration': 'Ostatnia tura trwała {duration}',
   'sessions.sidebar.session.subsessions.collapse': 'Zwiń pod-sesje',
@@ -1359,6 +1363,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.messageSendFailed': 'Nie udało się wysłać wiadomości. Załączniki zostały przywrócone.',
   'chat.chatInput.toast.noModelSelected': 'Wybierz dostawcę i model przed wysłaniem.',
   'chat.chatInput.toast.openSessionFirst': 'Najpierw otwórz sesję',
+  'chat.chatInput.toast.dictationKeptForOriginalSession': 'Dyktowanie zapisano jako szkic w sesji, w której je rozpoczęto',
   'chat.chatInput.toast.reviewFailed': 'Nie udało się przejrzeć zmian',
   'chat.chatInput.toast.planFeatureFailed': 'Nie udało się rozpocząć planowania funkcji',
   'chat.chatInput.toast.catchUpFailed': 'Nie udało się przywrócić kontekstu',
@@ -1928,6 +1933,8 @@ export const dict: Record<I18nKey, string> = {
   'diffView.unavailable.missingDescription': 'Został usunięty po wczytaniu listy zmian. Lista jest odświeżana.',
   'diffView.unavailable.nestedRepositoryTitle': 'Osobne repozytorium Git',
   'diffView.unavailable.nestedRepositoryDescription': 'Ten folder ma własną historię Git. Otwórz go jako projekt, aby zobaczyć jego zmiany.',
+  'diffView.unavailable.untrackedDirectoryTitle': 'Folder z nowymi plikami',
+  'diffView.unavailable.untrackedDirectoryDescription': 'Ten folder zawiera zbyt wiele nowych plików, aby wyświetlić je pojedynczo. Dodaj go do indeksu (stage) albo wpisz do .gitignore, jeśli nie należy do repozytorium.',
   'diffView.submodule.title': 'Submoduł',
   'diffView.submodule.commitChanged': 'Commit {from} → {to}',
   'diffView.submodule.commitUnchanged': 'Nadal na commicie {commit}',

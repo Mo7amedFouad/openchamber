@@ -2,6 +2,7 @@ import type { I18nKey } from './en';
 import { settingsDict } from './zh-TW.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict: Record<I18nKey, string> = {
@@ -31,6 +32,7 @@ export const dict: Record<I18nKey, string> = {
   ...settingsDict,
   ...linearIssuePickerI18n['zh-TW'],
   ...linearPanelI18n['zh-TW'],
+  ...routingI18n['zh-TW'],
   ...pluginPanelI18n['zh-TW'],
   'terminalView.actions.attachSelection': '附加所選輸出',
   'terminalView.actions.copySelection': '複製所選輸出',
@@ -438,6 +440,7 @@ export const dict: Record<I18nKey, string> = {
   'multirun.launcher.models.info': '選擇 2 個或更多模型。同一模型可重複加入。',
   'multirun.launcher.toast.fileTooLarge': '檔案「{fileName}」過大（最大 10MB）',
   'multirun.launcher.toast.attachFailed': '附加「{fileName}」失敗',
+  'multirun.launcher.toast.partialFailure': '部分工作階段無法建立。失敗數量：{failed}。',
   'multirun.launcher.toast.attachedSingle': '已附加 {count} 個檔案',
   'multirun.launcher.toast.attachedPlural': '已附加 {count} 個檔案',
   'multirun.modelMultiSelect.actions.addModel': '新增模型',
@@ -640,6 +643,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.status.permissionRequired': '需要權限',
   'sessions.sidebar.session.status.questionPendingSingle': '1 個待回答問題',
   'sessions.sidebar.session.status.questionPendingMany': '{count} 個待回答問題',
+  'sessions.sidebar.session.status.questionPending': '待回答問題',
   'sessions.sidebar.session.status.activeFor': '已活動 {duration}',
   'sessions.sidebar.session.status.lastTurnDuration': '上一輪耗時 {duration}',
   'sessions.sidebar.session.subsessions.collapse': '摺疊子會話',
@@ -1603,6 +1607,8 @@ export const dict: Record<I18nKey, string> = {
   'diffView.unavailable.missingDescription': '它在變更清單載入後被刪除。清單正在重新整理。',
   'diffView.unavailable.nestedRepositoryTitle': '獨立的 Git 儲存庫',
   'diffView.unavailable.nestedRepositoryDescription': '此資料夾有自己的 Git 歷史。將其作為專案開啟以查看變更。',
+  'diffView.unavailable.untrackedDirectoryTitle': '新檔案資料夾',
+  'diffView.unavailable.untrackedDirectoryDescription': '此資料夾中的新檔案太多，無法逐一列出。請暫存該資料夾，或若它不屬於儲存庫，將其加入 .gitignore。',
   'diffView.submodule.title': '子模組',
   'diffView.submodule.commitChanged': '提交 {from} → {to}',
   'diffView.submodule.commitUnchanged': '仍在提交 {commit}',
@@ -2415,6 +2421,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.someFilesSkipped': '部分檔案被跳過：\n{summary}',
   'chat.chatInput.toast.vscodePickFailed': '在 VS Code 中選擇檔案失敗',
   'chat.chatInput.toast.openSessionFirst': '請先開啟一個會話',
+  'chat.chatInput.toast.dictationKeptForOriginalSession': '語音輸入內容已儲存為草稿，位於你開始語音輸入的工作階段中',
   'chat.chatInput.toast.togglePermissionAutoAcceptFailed': '切換權限自動接受失敗',
   'chat.chatInput.reviewComments': '審查留言：',
   'chat.chatInput.reviewCommentsRemove': '移除審查留言',

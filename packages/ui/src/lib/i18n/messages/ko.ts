@@ -2,6 +2,7 @@ import type { I18nKey } from './en';
 import { settingsDict } from './ko.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict: Record<I18nKey, string> = {
@@ -31,6 +32,7 @@ export const dict: Record<I18nKey, string> = {
   ...settingsDict,
   ...linearIssuePickerI18n.ko,
   ...linearPanelI18n.ko,
+  ...routingI18n.ko,
   ...pluginPanelI18n.ko,
   'terminalView.actions.attachSelection': '선택한 출력 첨부',
   'terminalView.actions.copySelection': '선택한 출력 복사',
@@ -425,6 +427,7 @@ export const dict: Record<I18nKey, string> = {
   'multirun.launcher.models.info': '모델을 2개 이상 선택하세요. 같은 모델을 여러 번 추가할 수 있습니다.',
   'multirun.launcher.toast.fileTooLarge': '파일 "{fileName}"이 너무 큽니다(최대 10MB)',
   'multirun.launcher.toast.attachFailed': '"{fileName}" 첨부 실패',
+  'multirun.launcher.toast.partialFailure': '일부 세션을 만들지 못했습니다. 실패 수: {failed}.',
   'multirun.launcher.toast.attachedSingle': '파일 {count}개 첨부됨',
   'multirun.launcher.toast.attachedPlural': '파일 {count}개 첨부됨',
   'multirun.modelMultiSelect.actions.addModel': '모델 추가',
@@ -627,6 +630,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.status.permissionRequired': '권한 필요',
   'sessions.sidebar.session.status.questionPendingSingle': '대기 중인 질문 1개',
   'sessions.sidebar.session.status.questionPendingMany': '대기 중인 질문 {count}개',
+  'sessions.sidebar.session.status.questionPending': '대기 중인 질문',
   'sessions.sidebar.session.status.activeFor': '{duration} 동안 활성 상태',
   'sessions.sidebar.session.status.lastTurnDuration': '마지막 턴 소요 시간 {duration}',
   'sessions.sidebar.session.subsessions.collapse': '하위 세션 접기',
@@ -1629,6 +1633,8 @@ export const dict: Record<I18nKey, string> = {
   'diffView.unavailable.missingDescription': '변경 목록을 불러온 뒤 삭제되었습니다. 목록을 새로 고치는 중입니다.',
   'diffView.unavailable.nestedRepositoryTitle': '별도의 Git 저장소',
   'diffView.unavailable.nestedRepositoryDescription': '이 폴더에는 자체 Git 기록이 있습니다. 변경사항을 보려면 프로젝트로 여세요.',
+  'diffView.unavailable.untrackedDirectoryTitle': '새 파일 폴더',
+  'diffView.unavailable.untrackedDirectoryDescription': '이 폴더에는 새 파일이 너무 많아 하나씩 나열할 수 없습니다. 스테이지하거나, 저장소에 포함되지 않아야 한다면 .gitignore에 추가하세요.',
   'diffView.submodule.title': '서브모듈',
   'diffView.submodule.commitChanged': '커밋 {from} → {to}',
   'diffView.submodule.commitUnchanged': '여전히 커밋 {commit}',
@@ -2445,6 +2451,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.someFilesSkipped': '일부 파일을 건너뛰었습니다:\n{summary}',
   'chat.chatInput.toast.vscodePickFailed': 'VS Code에서 파일 선택에 실패했습니다',
   'chat.chatInput.toast.openSessionFirst': '먼저 세션을 여세요',
+  'chat.chatInput.toast.dictationKeptForOriginalSession': '받아쓰기가 시작한 세션의 초안으로 저장되었습니다',
   'chat.chatInput.toast.togglePermissionAutoAcceptFailed': '권한 자동 승인 전환에 실패했습니다',
   'chat.chatInput.reviewComments': '검토 댓글:',
   'chat.chatInput.reviewCommentsRemove': '검토 댓글 제거',

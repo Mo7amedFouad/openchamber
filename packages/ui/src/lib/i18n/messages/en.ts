@@ -1,6 +1,7 @@
 import { settingsDict } from './en.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict = {
@@ -30,6 +31,7 @@ export const dict = {
   ...settingsDict,
   ...linearIssuePickerI18n.en,
   ...linearPanelI18n.en,
+  ...routingI18n.en,
   ...pluginPanelI18n.en,
   'terminalView.actions.attachSelection': 'Attach selected output',
   'terminalView.actions.copySelection': 'Copy selected output',
@@ -424,6 +426,7 @@ export const dict = {
   'multirun.launcher.models.info': 'Select 2 or more models. Same model can be added multiple times.',
   'multirun.launcher.toast.fileTooLarge': 'File "{fileName}" is too large (max 10MB)',
   'multirun.launcher.toast.attachFailed': 'Failed to attach "{fileName}"',
+  'multirun.launcher.toast.partialFailure': 'Some sessions could not be created. Failed: {failed}.',
   'multirun.launcher.toast.attachedSingle': 'Attached {count} file',
   'multirun.launcher.toast.attachedPlural': 'Attached {count} files',
   'multirun.modelMultiSelect.actions.addModel': 'Add model',
@@ -626,6 +629,7 @@ export const dict = {
   'sessions.sidebar.session.status.permissionRequired': 'Permission required',
   'sessions.sidebar.session.status.questionPendingSingle': '1 pending question',
   'sessions.sidebar.session.status.questionPendingMany': '{count} pending questions',
+  'sessions.sidebar.session.status.questionPending': 'Pending question',
   'sessions.sidebar.session.status.activeFor': 'Active for {duration}',
   'sessions.sidebar.session.status.lastTurnDuration': 'Last turn took {duration}',
   'sessions.sidebar.session.subsessions.collapse': 'Collapse subsessions',
@@ -1627,6 +1631,8 @@ export const dict = {
   'diffView.unavailable.missingDescription': 'It was removed after the list of changes loaded. The list is refreshing.',
   'diffView.unavailable.nestedRepositoryTitle': 'Separate Git repository',
   'diffView.unavailable.nestedRepositoryDescription': 'This folder has its own Git history. Open it as a project to see its changes.',
+  'diffView.unavailable.untrackedDirectoryTitle': 'Folder of new files',
+  'diffView.unavailable.untrackedDirectoryDescription': 'This folder holds too many new files to list one by one. Stage it, or add it to .gitignore if it does not belong in the repository.',
   'diffView.submodule.title': 'Submodule',
   'diffView.submodule.commitChanged': 'Commit {from} → {to}',
   'diffView.submodule.commitUnchanged': 'Still on commit {commit}',
@@ -2445,6 +2451,7 @@ export const dict = {
   'chat.chatInput.toast.someFilesSkipped': 'Some files were skipped:\n{summary}',
   'chat.chatInput.toast.vscodePickFailed': 'Failed to pick files in VS Code',
   'chat.chatInput.toast.openSessionFirst': 'Open a session first',
+  'chat.chatInput.toast.dictationKeptForOriginalSession': 'Dictation saved as a draft in the session where you started it',
   'chat.chatInput.toast.togglePermissionAutoAcceptFailed': 'Failed to toggle permission auto-accept',
   'chat.chatInput.reviewComments': 'Review comments:',
   'chat.chatInput.reviewCommentsRemove': 'Remove review comments',

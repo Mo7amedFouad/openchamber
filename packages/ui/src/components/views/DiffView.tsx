@@ -937,12 +937,16 @@ export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
                             <div className="typography-ui-label font-semibold text-foreground">
                                 {diffLoadFailure.reason === 'nested_repository'
                                     ? t('diffView.unavailable.nestedRepositoryTitle')
-                                    : t('diffView.unavailable.missingTitle')}
+                                    : diffLoadFailure.reason === 'untracked_directory'
+                                        ? t('diffView.unavailable.untrackedDirectoryTitle')
+                                        : t('diffView.unavailable.missingTitle')}
                             </div>
                             <div className="typography-meta text-muted-foreground max-w-[32rem] text-center">
                                 {diffLoadFailure.reason === 'nested_repository'
                                     ? t('diffView.unavailable.nestedRepositoryDescription')
-                                    : t('diffView.unavailable.missingDescription')}
+                                    : diffLoadFailure.reason === 'untracked_directory'
+                                        ? t('diffView.unavailable.untrackedDirectoryDescription')
+                                        : t('diffView.unavailable.missingDescription')}
                             </div>
                             {diffLoadFailure.reason === 'path_not_found' ? (
                                 <button
@@ -1351,21 +1355,39 @@ export const DiffView: React.FC<DiffViewProps> = ({
         }
 
         if (!status?.files) return [];
-        const diffStats = status.diffStats ?? {};
+        const diffStats = status.diffStats;
         const includeFile = activeDiffScope === 'staged'
             ? isStagedStatusFile
             : activeDiffScope === 'working'
                 ? isWorkingStatusFile
                 : () => true;
 
+        const statsForFile = (filePath: string): { insertions: number; deletions: number } => {
+            const staged = diffStats?.staged?.[filePath];
+            const working = diffStats?.working?.[filePath];
+            if (activeDiffScope === 'staged') {
+                return { insertions: staged?.insertions ?? 0, deletions: staged?.deletions ?? 0 };
+            }
+            if (activeDiffScope === 'working') {
+                return { insertions: working?.insertions ?? 0, deletions: working?.deletions ?? 0 };
+            }
+            return {
+                insertions: (staged?.insertions ?? 0) + (working?.insertions ?? 0),
+                deletions: (staged?.deletions ?? 0) + (working?.deletions ?? 0),
+            };
+        };
+
         return status.files
             .filter(includeFile)
-            .map((file) => ({
-                ...file,
-                insertions: diffStats[file.path]?.insertions ?? 0,
-                deletions: diffStats[file.path]?.deletions ?? 0,
-                isNew: isNewStatusFile(file),
-            }))
+            .map((file) => {
+                const stats = statsForFile(file.path);
+                return {
+                    ...file,
+                    insertions: stats.insertions,
+                    deletions: stats.deletions,
+                    isNew: isNewStatusFile(file),
+                };
+            })
             .sort((a, b) => a.path.localeCompare(b.path));
     }, [activeDiffScope, branchFiles, comparison.files, lastTurnDiffs, status]);
 

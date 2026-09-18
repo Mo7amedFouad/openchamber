@@ -246,7 +246,7 @@ button,
 }
 
 :root.vscode-runtime [data-chat-input="true"] .cm-placeholder {
-  color: color-mix(in srgb, var(--vscode-input-placeholderForeground, var(--muted-foreground)) 65%, transparent);
+  color: var(--vscode-input-placeholderForeground, var(--muted-foreground));
 }
 
 /* Match chat footer background to input in WebKit to avoid dual-tone hover/focus */
@@ -1797,6 +1797,19 @@ textarea[data-terminal-hidden-input="true"]::placeholder {
   animation: oc-busy-pulse 1.2s steps(3, jump-none) infinite;
 }
 
+@keyframes oc-status-logo {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-status-logo {
+  animation: oc-status-logo 4s steps(10, jump-none) infinite;
+}
+
 @keyframes navrail-dot-wave {
   0%, 100% {
     transform: scale(0.72);
@@ -1918,7 +1931,8 @@ textarea[data-terminal-hidden-input="true"]::placeholder {
   }
 
   .animate-busy-pulse,
-  .animate-busy-wave {
+  .animate-busy-wave,
+  .animate-status-logo {
     animation: none;
   }
 
