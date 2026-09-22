@@ -162,7 +162,7 @@ ENV PATH=${NPM_CONFIG_PREFIX}/bin:${PATH}
 
 RUN npm config set prefix /home/openchamber/.npm-global && mkdir -p /home/openchamber/.npm-global && \
   mkdir -p /home/openchamber/.local /home/openchamber/.config /home/openchamber/.ssh && \
-  npm install -g opencode-ai && \
+  npm install -g @opencode/cli@2.0.14 && \
   npm install -g \
     typescript tsx \
     pnpm \
