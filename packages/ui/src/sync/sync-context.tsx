@@ -78,6 +78,7 @@ import {
   applyGlobalSessionStatusEvents,
   applyGlobalSessionStatusSnapshot,
   getDirectoryOwnedSessionIds,
+  setSessionParentResolver,
   useGlobalSessionStatusStore,
 } from "./global-session-status"
 import { applyGlobalBlockingRequestEvents } from "./global-blocking-requests"
@@ -135,6 +136,10 @@ type SyncRuntime = {
 type SyncSystem = SyncRuntime & {
   directory: string
 }
+
+// Subagent sessions keep their parent's turn open in the status index; the
+// global sessions list knows every session's parent, children included.
+setSessionParentResolver((sessionId) => useGlobalSessionsStore.getState().entityById.get(sessionId)?.parentID)
 
 const SYNC_CONTEXT_GLOBAL_KEY = "__openchamber_sync_context__"
 const SYNC_RUNTIME_CONTEXT_GLOBAL_KEY = "__openchamber_sync_runtime_context__"
@@ -1477,7 +1482,7 @@ async function reloadCatalog(kind: CatalogKind, childStores: ChildStoreManager):
     return
   }
   // No sync-store slice of their own: their consumers read them on demand.
-  if (kind === "skill" || kind === "plugin") return
+  if (kind === "skill" || kind === "plugin" || kind === "websearch") return
 
   await Promise.all([...childStores.children.entries()].map(async ([directory, store]) => {
     try {
@@ -1833,9 +1838,15 @@ export function handleEvent(
   // type will mutate. This preserves reference identity for untouched slices
   // so Zustand selectors skip re-renders for unrelated subscribers.
   const current = getDirectoryEventState(store, batch)
-  const updatedPart = payload.type === "message.part.updated" ? payload.properties.part : undefined
-  const previousPart = updatedPart
-    ? current.part[updatedPart.messageID]?.find((part) => part.id === updatedPart.id)
+  // OpenCode v2 settles a live tool through `message.tool.transition`; a full
+  // `message.part.updated` arrives only for snapshots. Both can finish a tool.
+  const toolPartRef = payload.type === "message.part.updated"
+    ? { messageID: payload.properties.part.messageID, partID: payload.properties.part.id }
+    : payload.type === "message.tool.transition"
+      ? { messageID: payload.properties.messageID, partID: payload.properties.partID }
+      : undefined
+  const previousPart = toolPartRef
+    ? current.part[toolPartRef.messageID]?.find((part) => part.id === toolPartRef.partID)
     : undefined
   const draft: State = { ...current }
   const clonedFields = batch?.clonedFields.get(store) ?? new Set<keyof State>()
@@ -1914,7 +1925,10 @@ export function handleEvent(
     recordDirectoryRecoveryEvent(store, payload)
   }
 
-  if (reducerChanged && updatedPart) {
+  const updatedPart = reducerChanged && toolPartRef
+    ? draft.part[toolPartRef.messageID]?.find((part) => part.id === toolPartRef.partID)
+    : undefined
+  if (updatedPart) {
     sessionEvents.requestGitRefreshForToolTransition(resolvedDirectory, previousPart, updatedPart)
   }
 

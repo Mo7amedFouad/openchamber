@@ -88,13 +88,17 @@ import {
     isQuestionTool,
     isShellTool,
     isSubagentTool,
+    isWebSearchTool,
     isWriteTool,
     normalizeToolName,
     toolDescription, type ToolDescription,
     toolInputPath,
+    toolFileDiffs,
 } from '@/lib/opencode/tools';
+import { parseWebSearchOutput, webSearchProviderOf } from '@/lib/opencode/websearch';
 import { ApplyPatchFileButtons } from './ApplyPatchFileButtons';
 import { openApplyPatchFileInEditor } from './applyPatchEditorAction';
+import { WebSearchResults } from './WebSearchResults';
 
 type ToolJsonViewMode = 'summary' | 'formatted' | 'raw';
 
@@ -202,8 +206,21 @@ const useDeferredExpandedContent = (isExpanded: boolean) => {
     return shouldRender;
 };
 
-const parseDiffStats = (metadata?: Record<string, unknown>): { added: number; removed: number } | null => {
-    const diffText = getPatchText((metadata as { patch?: unknown } | undefined)?.patch)
+const parseDiffStats = (metadata?: Metadata): { added: number; removed: number } | null => {
+    const files = toolFileDiffs(metadata);
+    if (files.length > 0) {
+        let added = 0;
+        let removed = 0;
+        for (const file of files) {
+            // Missing counts are unknown, not zero; never show a partial total.
+            if (file.additions === undefined || file.deletions === undefined) return null;
+            added += file.additions;
+            removed += file.deletions;
+        }
+        return { added, removed };
+    }
+
+    const diffText = getPatchText(metadata?.patch)
         ?? getPatchText(metadata?.diff);
     if (!diffText) return null;
 
@@ -1254,6 +1271,11 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
         return formatInputForDisplay(input, part.tool);
     }, [input, part.tool]);
     const hasInputText = !hideToolInputPreview && inputTextContent.trim().length > 0;
+    // `null` keeps the plain text renderer for a result OpenCode formatted differently.
+    const webSearchOutput = React.useMemo(
+        () => (isWebSearchTool(part.tool) && state.status === 'completed' && hasStringOutput ? parseWebSearchOutput(outputString) : null),
+        [hasStringOutput, outputString, part.tool, state.status],
+    );
     const isWriteLikeTool = isWriteTool(part.tool);
     const writeLikeInputPatch = React.useMemo(() => {
         if (!isWriteLikeTool || !hasInputText) {
@@ -1510,6 +1532,13 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
 
         if (isWriteLikeTool) {
             return null;
+        }
+
+        if (webSearchOutput) {
+            return renderScrollableBlock(
+                <WebSearchResults output={webSearchOutput} providerId={webSearchProviderOf(metadata)} />,
+                { className: 'p-1', maxHeightClass: 'max-h-[50vh]' }
+            );
         }
 
         if (hasStringOutput && outputString.trim()) {

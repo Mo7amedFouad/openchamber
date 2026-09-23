@@ -1,7 +1,7 @@
 import { createVSCodeAPIs } from './api';
 import { createRemovalTombstones } from './inlineCommentRemovals';
 import { resolveCommentTarget } from './inlineCommentTarget';
-import { onCommand, onThemeChange, postBridgeNotification, proxyApiRequest, proxySessionMessageRequest, sendBridgeMessage, startSseProxy, stopSseProxy } from './api/bridge';
+import { onCommand, onThemeChange, postBridgeNotification, proxyApiRequest, proxySessionMessageRequest, sendBridgeMessage, sendBridgeMessageWithOptions, startSseProxy, stopSseProxy } from './api/bridge';
 import { vscodeStreamPerfCount, vscodeStreamPerfMeasure, vscodeStreamPerfObserve } from './api/streamPerf';
 import { extractBodyBase64, extractBodyText, extractJsonBody, hasInitBody } from './requestBodyTransport';
 import type { RuntimeAPIs } from '@openchamber/ui/lib/api/types';
@@ -752,6 +752,28 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     }
   }
 
+  if (pathname === '/api/config/websearch' && method === 'GET') {
+    const directory = getRequestDirectoryHint(url, input, init);
+    try {
+      const data = await sendBridgeMessage('api:config/websearch', { method: 'GET', directory });
+      return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
+  if (pathname === '/api/config/websearch' && method === 'PUT') {
+    const body = await extractJsonBody(input, init, method);
+    try {
+      const data = await sendBridgeMessage('api:config/websearch', body);
+      return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
   if (pathname === '/api/config/mcp') {
     const verb = method;
     const body = await extractJsonBody(input, init, method);
@@ -1095,6 +1117,14 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     });
   }
 
+  if (pathname === '/api/opencode/compatibility' && method === 'GET') {
+    return jsonResponse(await sendBridgeMessage('api:opencode/compatibility'));
+  }
+
+  if (pathname === '/api/opencode/install-v2' && method === 'POST') {
+    return jsonResponse(await sendBridgeMessageWithOptions('api:opencode/install-v2', undefined, { timeoutMs: 0 }));
+  }
+
   if (pathname === '/api/opencode/upgrade-status' && method === 'GET') {
     const data = await sendBridgeMessage('api:opencode/upgrade-status');
     return jsonResponse(data);
@@ -1102,7 +1132,7 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
 
   if (pathname === '/api/opencode/upgrade' && method === 'POST') {
     const body = await extractJsonBody(input, init, method);
-    const result = await sendBridgeMessage<{ status: number; body: unknown }>('api:opencode/upgrade', body);
+    const result = await sendBridgeMessageWithOptions<{ status: number; body: unknown }>('api:opencode/upgrade', body, { timeoutMs: 0 });
     return jsonResponse(result.body, result.status);
   }
 

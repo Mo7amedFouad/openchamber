@@ -50,7 +50,7 @@ export type SessionPatch = {
   permissions?: PermissionRuleset
   revert?: Session["revert"] | null
   outcome?: Session["outcome"]
-  /** Full replacement of the session's metadata (OpenChamber-owned overlay). */
+  /** Full replacement of the session's metadata. */
   metadata?: Metadata
   /** `archived: null` restores an archived session. */
   time?: Partial<Omit<Session["time"], "archived">> & { archived?: number | null }
@@ -92,6 +92,8 @@ export type CatalogKind =
   | "model"
   | "credential"
   | "project"
+  /** Web search providers or the default choice changed (`websearch.updated`). */
+  | "websearch"
 
 export type SyncEvent =
   | { type: "server.connected"; properties: Record<never, never> }
@@ -231,6 +233,9 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
       return [{ type: "session.deleted", properties: { sessionID: event.data.sessionID } }]
     case "session.renamed":
       return [sessionEvent(event.data.sessionID, { title: event.data.title, time: { updated: event.created } })]
+    // OpenCode's record holds the full metadata, so this replaces it.
+    case "session.metadata.updated":
+      return [sessionEvent(event.data.sessionID, { metadata: event.data.metadata })]
     case "session.moved":
       return [
         sessionEvent(event.data.sessionID, {
@@ -790,6 +795,8 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
       return [{ type: "catalog.updated", properties: { kind: "provider" } }]
     case "model.updated":
       return [{ type: "catalog.updated", properties: { kind: "model" } }]
+    case "websearch.updated":
+      return [{ type: "catalog.updated", properties: { kind: "websearch" } }]
 
     // --- known events the sync layer deliberately does not model -------------
     //
@@ -814,7 +821,6 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
     // Catalogs OpenChamber does not surface as lists of their own.
     case "models-dev.refreshed":
     case "reference.updated":
-    case "websearch.updated":
       return []
     // Resources of an MCP server; OpenChamber shows connection status only
     // (`mcp.status.changed`).
