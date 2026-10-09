@@ -349,7 +349,15 @@ the snapshot without being deleted, so the authoritative cleanup skips it; the
 event pipeline hands the host's `openchamber:space-stream` announcement to
 `sync-context.tsx`, which marks a lost stream as stale and, when it is back,
 re-reads that one space's directories with `refreshSessionsForDirectories`,
-whose answer marks the space reachable again. The active-session snapshot that
+whose answer marks the space reachable again; a stream back on a space the
+journey list holds as stopped means it was started from another window, so
+the list is read again too. While the journey list says a space is stopped or
+its container is gone (`isSpaceDirectoryStopped`), the active-session
+watchdog skips that space's directories, status poll, stale resync and child
+discovery alike, because every request would be the dispatcher's refusal
+and a log line on the host; the sessions keep the status they last reported,
+and the polls resume with the list that says the space runs. The browser
+panel's dev-server look pauses on the same rule. The active-session snapshot that
 settles an unfinished turn is the host's, global, and never covers a space, so
 `getActiveSessionStatuses` asks a space directory's own server for it; the
 host's empty answer would otherwise mark a turn running inside as interrupted.
@@ -692,7 +700,9 @@ Examples of global-store updates performed in `session-actions.ts`:
 
 ### Blocking-request (form/permission) reply routing
 
-`replyToForm`, `cancelForm`, `respondToPermission`, and `dismissPermission` route the reply through `resolveDirectoryForBlockingRequest`. The directory chosen decides which OpenCode instance resolves the pending request, so it must be the **session record's own server-confirmed directory** (ownership), never the containing child-store key (containment): a project store legitimately holds its worktree sessions, and a reply addressed to the parent instance makes the server answer `FormNotFoundError` while the form stays pending in the worktree instance — the session is then stuck on the running form tool with no recovery. When a reply/reject comes back not-found, the stale request is removed locally and a `settled-running-tool` tail materialization is enqueued so the trailing tool part converges to the server's actual state instead of leaving the UI on "asking question" forever.
+`replyToForm`, `cancelForm`, `respondToPermission`, and `dismissPermission` route the reply through `resolveDirectoryForBlockingRequest`. The directory chosen decides which OpenCode instance resolves the pending request, so it must be the **session record's own server-confirmed directory** (ownership), never the containing child-store key (containment): a project store legitimately holds its worktree sessions, and a reply addressed to the parent instance makes the server answer `FormNotFoundError` while the form stays pending in the worktree instance — the session is then stuck on the running form tool with no recovery. When a form reply/cancel comes back not-found, the stale request is removed locally and a `settled-running-tool` tail materialization is enqueued so the trailing tool part converges to the server's actual state instead of leaving the UI on "asking question" forever. A permission reply/reject that comes back not-found only removes the request locally.
+
+Sending a message while forms are open cancels them through `dismissOpenFormsForSession`, which removes them from the store before the cancel request so the card disappears at once. A not-found answer keeps them removed. Any other failure puts each form back into the store and session it came from: the agent is still waiting, and no event will return it. The mounted chat's form-only recovery would refetch the open session's own form, but a subagent's form shown in the parent chat has no other path back. Open permissions follow the same rule through `dismissOpenPermissionsForSession`, which rejects them: a not-found answer keeps them removed, any other failure puts each one back. Permissions have no in-chat recovery at all, so without the restore even the open session's own prompt stays hidden until a reconnect. A restored card can belong to a request the server already settled (its response was lost, or another client answered it); any reply from the card then comes back not-found, and `respondToPermission` removes it. The same cleanup applies to its other callers, VS Code auto-accept and the desktop tray's approve action.
 
 ### Restore (unarchive) contract
 
@@ -783,6 +793,13 @@ exactly, protecting the shared roots themselves. Helpers still return the origin
 configured/legacy root as the identity for folders and scopes. Older servers
 without these fields retain exact matching against their original roots; the UI
 never guesses filesystem case sensitivity from the client's operating system.
+
+The UI never guesses the chats root from the home either. `getChatsRoot` is
+null until the home API answers, and `useChatsRoot` re-renders its readers
+(the sidebar's chats group, a chat draft's effective directory, the project
+context owner) once it does. With `OPENCHAMBER_DATA_DIR` the root is outside the
+home and the home's legacy folder does not exist, so a guessed root failed to
+initialize and the chats group said "Could not initialize workspace."
 
 Typing the first character in a managed Chat draft starts one deduplicated directory preparation for that draft. Materialization consumes the prepared directory before `createSession`, removing filesystem creation from the usual submit path. Closing the draft, changing it to a project target, or completing preparation after the runtime/draft changed deletes the unclaimed directory. A create failure also deletes the consumed directory.
 

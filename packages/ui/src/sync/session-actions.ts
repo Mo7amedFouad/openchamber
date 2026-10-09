@@ -3,7 +3,7 @@
  * Replaces the action methods from the old useSessionStore.
  */
 
-import type { FilePart, FormRequest, JsonValue, Message, Metadata, ModelRef, Part, Session, SyntheticMessage, TextPart, UserMessage } from "@/lib/opencode/model"
+import type { FilePart, FormRequest, JsonValue, Message, Metadata, ModelRef, Part, PermissionRequest, Session, SyntheticMessage, TextPart, UserMessage } from "@/lib/opencode/model"
 import { compact, partIds } from "@/lib/opencode/model"
 import { readSubagentRun } from "@/lib/opencode/subagent-run"
 import { readDispatchedSessionResult } from "@/lib/opencode/dispatched-session"
@@ -888,6 +888,30 @@ function removeFormRequestFromChildStores(sessionId: string, requestId: string):
   }
 
   return removed
+}
+
+/** Put back a form removed optimistically; a no-op when the store already holds it. */
+function restoreFormRequest(store: DirectoryStoreApi, sessionId: string, form: FormRequest): void {
+  store.setState((state) => {
+    const forms = state.form[sessionId] ?? []
+    const result = Binary.search(forms, form.id, (item) => item.id)
+    if (result.found) return state
+    const next = [...forms]
+    next.splice(result.index, 0, form)
+    return { form: { ...state.form, [sessionId]: next } }
+  })
+}
+
+/** Put back a permission removed optimistically; a no-op when the store already holds it. */
+function restorePermissionRequest(store: DirectoryStoreApi, sessionId: string, permission: PermissionRequest): void {
+  store.setState((state) => {
+    const permissions = state.permission[sessionId] ?? []
+    const result = Binary.search(permissions, permission.id, (item) => item.id)
+    if (result.found) return state
+    const next = [...permissions]
+    next.splice(result.index, 0, permission)
+    return { permission: { ...state.permission, [sessionId]: next } }
+  })
 }
 
 function isPermissionRequestNotFoundError(error: unknown): boolean {
@@ -2221,8 +2245,16 @@ export async function respondToPermission(
     || resolveDirectoryForBlockingRequest("permission", sessionId, requestId)
     || getSessionDirectory(sessionId)
     || dir()
-  if (await opencodeClient.replyToPermission(sessionId, requestId, response, { directory }) !== true) {
-    throw new Error("Permission reply failed")
+  try {
+    if (await opencodeClient.replyToPermission(sessionId, requestId, response, { directory }) !== true) {
+      throw new Error("Permission reply failed")
+    }
+  } catch (error) {
+    // The server no longer has it, so the card has nothing left to answer.
+    if (isPermissionRequestNotFoundError(error)) {
+      removePermissionRequestFromChildStores(sessionId, requestId)
+    }
+    throw error
   }
 }
 
@@ -2261,7 +2293,8 @@ export async function dismissPermission(
  * Returns true when at least one permission was dismissed. Rejection failures are
  * swallowed (a stranded permission must never block the send);
  * PermissionNotFoundError also clears the stale entry from the child store via
- * {@link dismissPermission}.
+ * {@link dismissPermission}. Any other failure puts the permission back: the
+ * agent is still waiting on it, and no event will bring it back.
  *
  * Rejecting unblocks the agent's tool without guaranteeing an idle session.
  * The chat caller preserves explicit Steer as a direct send and queues other
@@ -2272,7 +2305,7 @@ export async function dismissOpenPermissionsForSession(sessionId: string): Promi
   const stores = _childStores
   if (!stores) return false
 
-  const toDismiss: Array<{ sessionId: string; requestId: string }> = []
+  const toDismiss: Array<{ store: DirectoryStoreApi; sessionId: string; permission: PermissionRequest }> = []
   for (const [, store] of stores.children) {
     const state = store.getState()
     const scopedIds = computeSubtreeIds(state.session, sessionId)
@@ -2282,7 +2315,7 @@ export async function dismissOpenPermissionsForSession(sessionId: string): Promi
       const requests = permissionsBySession[scopedId]
       if (!requests) continue
       for (const request of requests) {
-        toDismiss.push({ sessionId: scopedId, requestId: request.id })
+        toDismiss.push({ store, sessionId: scopedId, permission: request })
       }
     }
   }
@@ -2291,19 +2324,20 @@ export async function dismissOpenPermissionsForSession(sessionId: string): Promi
 
   // Optimistically clear the permissions from the local store so the prompt
   // disappears immediately, before the reject round-trip.
-  for (const { sessionId: scopedSessionId, requestId } of toDismiss) {
-    removePermissionRequestFromChildStores(scopedSessionId, requestId)
+  for (const { sessionId: scopedSessionId, permission } of toDismiss) {
+    removePermissionRequestFromChildStores(scopedSessionId, permission.id)
   }
 
   await Promise.all(
-    toDismiss.map(async ({ sessionId: scopedSessionId, requestId }) => {
+    toDismiss.map(async ({ store, sessionId: scopedSessionId, permission }) => {
       try {
-        await dismissPermission(scopedSessionId, requestId)
+        await dismissPermission(scopedSessionId, permission.id)
       } catch (error) {
         if (isPermissionRequestNotFoundError(error)) return
-        // Swallow: a failed dismissal must not block the send. The next
-        // permission.asked / permission.replied event reconciles the store.
+        // Swallow: a failed dismissal must not block the send. The permission
+        // is still pending server-side, so it goes back where it was.
         console.error("[session-actions] Failed to dismiss open permission on send:", error)
+        restorePermissionRequest(store, scopedSessionId, permission)
       }
     }),
   )
@@ -2377,7 +2411,9 @@ export async function cancelForm(sessionId: string, formId: string): Promise<voi
  *
  * Returns true when at least one form was cancelled. Failures are swallowed (a
  * stranded form must never block the send); a not-found error also clears the
- * stale entry from the child store via {@link cancelForm}.
+ * stale entry from the child store via {@link cancelForm}. Any other failure
+ * puts the form back: the agent is still waiting on it, and no event will bring
+ * it back (a subagent's form has no other recovery path, #2448).
  *
  * Rejecting unblocks the agent's tool without guaranteeing an idle session.
  * The chat caller preserves explicit Steer as a direct send (the inbox takes
@@ -2389,7 +2425,7 @@ export async function dismissOpenFormsForSession(sessionId: string): Promise<boo
   const stores = _childStores
   if (!stores) return false
 
-  const toDismiss: Array<{ sessionId: string; formId: string }> = []
+  const toDismiss: Array<{ store: DirectoryStoreApi; sessionId: string; form: FormRequest }> = []
   for (const [, store] of stores.children) {
     const state = store.getState()
     const scopedIds = computeSubtreeIds(state.session, sessionId)
@@ -2399,7 +2435,7 @@ export async function dismissOpenFormsForSession(sessionId: string): Promise<boo
       const requests = formsBySession[scopedId]
       if (!requests) continue
       for (const request of requests) {
-        toDismiss.push({ sessionId: scopedId, formId: request.id })
+        toDismiss.push({ store, sessionId: scopedId, form: request })
       }
     }
   }
@@ -2408,19 +2444,20 @@ export async function dismissOpenFormsForSession(sessionId: string): Promise<boo
 
   // Optimistically clear the forms from the local store so the prompt
   // disappears immediately, before the cancel round-trip.
-  for (const { sessionId: scopedSessionId, formId } of toDismiss) {
-    removeFormRequestFromChildStores(scopedSessionId, formId)
+  for (const { sessionId: scopedSessionId, form } of toDismiss) {
+    removeFormRequestFromChildStores(scopedSessionId, form.id)
   }
 
   await Promise.all(
-    toDismiss.map(async ({ sessionId: scopedSessionId, formId }) => {
+    toDismiss.map(async ({ store, sessionId: scopedSessionId, form }) => {
       try {
-        await cancelForm(scopedSessionId, formId)
+        await cancelForm(scopedSessionId, form.id)
       } catch (error) {
         if (isFormRequestNotFoundError(error)) return
-        // Swallow: a failed cancellation must not block the send. The next
-        // form.created / form.cancelled event reconciles the store.
+        // Swallow: a failed cancellation must not block the send. The form
+        // is still pending server-side, so it goes back where it was.
         console.error("[session-actions] Failed to cancel open form on send:", error)
+        restoreFormRequest(store, scopedSessionId, form)
       }
     }),
   )

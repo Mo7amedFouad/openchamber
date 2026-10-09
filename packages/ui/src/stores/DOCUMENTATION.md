@@ -149,7 +149,30 @@ with `isHomeReady` false. After authentication the session gate calls
 new chat cannot even be created. A resolution still in flight is awaited, not
 replaced. If the server still cannot name the home, the app starts in `/` as it
 did before. A home that is already known, from storage or the desktop shell,
-shows the app at once.
+shows the app at once when a last directory is stored.
+
+When no last directory is stored, no project is open, and the app works in the
+managed chats root (`noProjectDirectory`), where a chat draft works anyway.
+Every OpenCode read names the app's directory, and with the home there OpenCode
+started a location over the whole home folder, file watcher and MCP servers
+included. Until the server names the chats root the directory is empty: the
+store sets no client directory, `isHomeReady` stays false and the session gate
+keeps the app unmounted, because the home resolution waits for the chats root
+too. Without a chats root the home stays the directory, still not ready, so a
+server that answered 401 before login is asked again after it; the home is
+the lasting answer only when the server cannot name the chats root after that,
+and in VS Code, which has no managed chats. The chats root comes from the
+server's answer itself (`resolveChatsRootDirectory`): the cache behind
+`getChatsRoot` is keyed by the runtime key at request time, which can still
+change while the page starts.
+
+That fallback is not saved as the last directory, locally or in the server
+settings. Removing the last project also goes there
+(`goToNoProjectDirectory`) and forgets the stored last directory: it is removed
+locally and sent to the server as `''`. The server adds a stored last directory
+as a project when the list is empty and warms it on every start, so either path
+used to put the home, or the project just removed, back in the sidebar and
+start OpenCode there on every launch.
 
 Nothing about directories is carried from one host to another (the desktop
 host switcher, a mobile instance switch). Three rules hold that:
@@ -167,8 +190,8 @@ host switcher, a mobile instance switch). Three rules hold that:
   entered. When it remembers none and the switch comes from another real host,
   `resetForRuntimeSwitch` forgets the directory: it is unknown (`/`,
   `isHomeReady` false, no client directory; `isDirectoryUnknown`) until the home
-  resolves, and `synchronizeHomeDirectory` then adopts the home whatever is
-  stored. The reset writes nothing, so the previous host's stored last
+  resolves, and `synchronizeHomeDirectory` then adopts that host's
+  no-project directory whatever is stored. The reset writes nothing, so the previous host's stored last
   directory survives for its next start. Coming from no host (a cold launch
   that connects through a switch) the directory the window started with stays.
   Leaving a host records its directory unless it is unknown; a key that names
@@ -678,6 +701,7 @@ Expected model:
 - explicit Git actions refresh status/branches/log as needed
 - every status-affecting git mutation invalidates the HTTP adapter's status cache on its success path (failed mutations invalidate nothing), so the follow-up refresh is authoritative instead of the pre-mutation cache entry
 - the sync event handler issues one Git refresh hint when a live file-mutating tool first reaches `completed`; this does not depend on `ToolPart` mounting, and duplicate terminal events do not replay the hint
+- tool hints are coalesced per directory: the first completion opens a 250 ms window and every completion in that directory during it is answered by one pathless hint at its end, so a burst of parallel or back-to-back tool calls costs one status read. Direct hints (editor saves, reverts, explicit actions) are delivered at once. A runtime switch drops hints still waiting (`sessionEvents.cancelPendingGitRefreshes`)
 - every Git refresh hint invalidates the store request generation and the HTTP status cache before visible consumers request status, so they share one post-mutation read instead of accepting a cached or pre-mutation response
 - a successful dirty save from the in-app file editor issues a path-scoped Git refresh hint; clean autosave checks remain no-ops
 - refresh hints with authoritative file paths invalidate only those cached and currently rendered diffs before status refresh; pathless tools request status reconciliation without broadly remounting DiffView
