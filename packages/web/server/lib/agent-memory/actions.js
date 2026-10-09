@@ -17,13 +17,10 @@
  * which is also what the user means by "this project".
  */
 
-const MEMORY_TYPES = new Set(['fact', 'preference', 'reference']);
+import { asNonEmptyString } from '../shared/guards.js';
+import { MEMORY_BODY_MAX_LENGTH } from './runtime.js';
 
-const asNonEmptyString = (value) => {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-};
+const MEMORY_TYPES = new Set(['fact', 'preference', 'reference']);
 
 /** Everything the agent is told about an entry it has not opened yet. */
 const toSummary = (entry, scope) => ({
@@ -170,6 +167,11 @@ export const createAgentMemoryActions = (dependencies) => {
     const body = asNonEmptyString(input.body);
     if (!title) fail('title is required for memory.save', 400);
     if (!body) fail('body is required for memory.save', 400);
+    // Shared limit with the runtime, which enforces it again on create; the
+    // pre-check here is what makes the agent see a 400 usage error.
+    if (body.trim().length > MEMORY_BODY_MAX_LENGTH) {
+      fail(`body holds at most ${MEMORY_BODY_MAX_LENGTH} characters, and this one is ${body.trim().length}`, 400);
+    }
     if (input.type !== undefined && !MEMORY_TYPES.has(input.type)) {
       fail('type must be fact, preference, or reference', 400);
     }

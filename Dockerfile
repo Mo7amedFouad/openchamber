@@ -31,6 +31,7 @@ WORKDIR /home/openchamber
 RUN apt-get update && apt-get install -y --no-install-recommends \
   bash \
   bat \
+  bzip2 \
   ca-certificates \
   curl \
   fd-find \
@@ -162,7 +163,7 @@ ENV PATH=${NPM_CONFIG_PREFIX}/bin:${PATH}
 
 RUN npm config set prefix /home/openchamber/.npm-global && mkdir -p /home/openchamber/.npm-global && \
   mkdir -p /home/openchamber/.local /home/openchamber/.config /home/openchamber/.ssh && \
-  npm install -g @opencode/cli@2.0.16 && \
+  npm install -g @opencode/cli@2.0.25 && \
   npm install -g \
     typescript tsx \
     pnpm \

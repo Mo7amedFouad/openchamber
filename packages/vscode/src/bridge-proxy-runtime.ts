@@ -1,5 +1,13 @@
 import type { BridgeContext, BridgeResponse } from './bridge';
 import { waitForApiUrl } from './opencode-ready';
+import {
+  CREDENTIAL_LIST_ERROR,
+  ENTERPRISE_MODE_ERROR,
+  isCredentialListRequest,
+  isEnterpriseMode,
+  isProviderConnectRequest,
+} from '../../web/server/lib/enterprise-mode.js';
+import { vcsInitRefusal, vcsInitRefusalBody } from '../../web/server/lib/git/repository-root.js';
 import { isSessionRecordPath, overlaySessionResponseBody, parseJson, type SessionStateStore } from './openchamberSessionState';
 
 type BridgeMessageInput = {
@@ -104,6 +112,9 @@ const buildReadCoalesceKey = (targetUrl: string, headers: Record<string, string>
   return `GET ${targetUrl}\n${canonicalHeaders}`;
 };
 
+const normalizeHeaderKeys = (headers: Record<string, string> | undefined): Record<string, string> =>
+  Object.fromEntries(Object.entries(headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]));
+
 const performApiProxyFetch = async (
   targetUrl: string,
   method: string,
@@ -162,6 +173,23 @@ const overlayOwnedSessionState = async (
   return { ...data, bodyText: JSON.stringify(overlaySessionResponseBody(body, archived, stored)) };
 };
 
+const RESOLVE_PROBE_BASE = 'http://opencode.invalid/';
+
+/**
+ * The path OpenCode receives for a webview path, resolved the same way the
+ * request URL is built below; null when it would leave the OpenCode origin.
+ */
+const resolveOpenCodePath = (normalizedPath: string): string | null => {
+  let resolved: URL;
+  try {
+    resolved = new URL(normalizedPath.replace(/^\/+/, ''), RESOLVE_PROBE_BASE);
+  } catch {
+    return null;
+  }
+  if (resolved.origin !== new URL(RESOLVE_PROBE_BASE).origin) return null;
+  return `${resolved.pathname}${resolved.search}`;
+};
+
 export async function handleProxyBridgeMessage(
   message: BridgeMessageInput,
   ctx: BridgeContext | undefined,
@@ -198,6 +226,51 @@ export async function handleProxyBridgeMessage(
         return { id, type, success: true, data };
       }
 
+      // The path is resolved as a URL before it goes out, so `/http:api/...`
+      // or `/http://host/...` would reach a path the checks below never saw.
+      // Check what OpenCode will receive, and refuse anything that leaves it.
+      const resolvedPath = resolveOpenCodePath(normalizedPath);
+      if (resolvedPath === null) {
+        const data: ApiProxyResponsePayload = {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+          bodyText: JSON.stringify({ error: 'Not an OpenCode path' }),
+        };
+        return { id, type, success: true, data };
+      }
+
+      // Enterprise mode: the same provider-connect routes the web server refuses.
+      if (isProviderConnectRequest(normalizedMethod, resolvedPath) && isEnterpriseMode()) {
+        const data: ApiProxyResponsePayload = {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+          bodyText: JSON.stringify({ error: ENTERPRISE_MODE_ERROR, code: 'enterprise_mode' }),
+        };
+        return { id, type, success: true, data };
+      }
+
+      // Every stored key, secrets included: the extension host reads it for
+      // itself, the webview never gets it.
+      if (isCredentialListRequest(normalizedMethod, resolvedPath)) {
+        const data: ApiProxyResponsePayload = {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+          bodyText: JSON.stringify({ error: CREDENTIAL_LIST_ERROR, code: 'credential_list_refused' }),
+        };
+        return { id, type, success: true, data };
+      }
+
+      // Same refusal as the web server: no repository in home or at a disk root.
+      const vcsInitRefused = vcsInitRefusal(normalizedMethod, resolvedPath, normalizeHeaderKeys(headers));
+      if (vcsInitRefused) {
+        const data: ApiProxyResponsePayload = {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+          bodyText: JSON.stringify(vcsInitRefusalBody(vcsInitRefused)),
+        };
+        return { id, type, success: true, data };
+      }
+
       const localFsResponse = await deps.tryHandleLocalFsProxy(normalizedMethod, normalizedPath);
       if (localFsResponse) {
         return { id, type, success: true, data: localFsResponse };
@@ -210,7 +283,16 @@ export async function handleProxyBridgeMessage(
       }
 
       const base = `${apiUrl.replace(/\/+$/, '')}/`;
-      const targetUrl = new URL(normalizedPath.replace(/^\/+/, ''), base).toString();
+      const target = new URL(normalizedPath.replace(/^\/+/, ''), base);
+      if (target.origin !== new URL(base).origin) {
+        const data: ApiProxyResponsePayload = {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+          bodyText: JSON.stringify({ error: 'Not an OpenCode path' }),
+        };
+        return { id, type, success: true, data };
+      }
+      const targetUrl = target.toString();
       const requestHeaders: Record<string, string> = {
         ...deps.sanitizeForwardHeaders(headers),
         ...ctx?.manager?.getOpenCodeAuthHeaders(),

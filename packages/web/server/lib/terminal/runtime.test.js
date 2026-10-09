@@ -1,12 +1,32 @@
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
+import net from 'node:net';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 
 import { createTerminalRuntime } from './runtime.js';
 import { createTerminalWsControlFrame, readTerminalWsControlFrame } from './terminal-ws-protocol.js';
+
+// Drives the raw upgrade handler by hand. A `ws` client hides the HTTP response
+// once the 101 lands, and a real client cannot be made to upgrade one socket
+// twice, so the test emits the `upgrade` event directly on a real socket.
+function manualUpgradeRequest(port) {
+  const key = crypto.randomBytes(16).toString('base64');
+  return {
+    url: '/api/terminal/ws',
+    method: 'GET',
+    headers: {
+      host: `127.0.0.1:${port}`,
+      upgrade: 'websocket',
+      connection: 'Upgrade',
+      'sec-websocket-key': key,
+      'sec-websocket-version': '13',
+    },
+  };
+}
 
 function createResponse() {
   return {
@@ -378,6 +398,24 @@ describe('terminal runtime', () => {
     expect(server.listenerCount('upgrade')).toBe(0);
   });
 
+  it('gives the shell the directory variables from Settings without bringing back what it strips', async () => {
+    const applyToDirectory = vi.fn(async (_directory, env) => ({
+      ...env,
+      PROJECT_TOOL: 'from-project',
+      TERM: 'dumb',
+      NODE_CHANNEL_FD: '3',
+    }));
+    const harness = createHarness({ environmentRuntime: { applyToDirectory } });
+    try {
+      await harness.routes.post.get('/api/terminal/create')({ body: { sessionId: 'term-env', cwd: '/repo' } }, createResponse());
+      expect(applyToDirectory).toHaveBeenCalledWith('/repo', expect.objectContaining({ PATH: expect.any(String) }), { refresh: true });
+      const { env } = harness.processes[0].options;
+      expect(env.PROJECT_TOOL).toBe('from-project');
+      expect(env.TERM).toBe('xterm-256color');
+      expect(env).not.toHaveProperty('NODE_CHANNEL_FD');
+    } finally { await harness.runtime.shutdown(); }
+  });
+
   it('creates client-identified sessions and forwards bounded resize operations', async () => {
     const harness = createHarness();
     try {
@@ -455,6 +493,25 @@ describe('terminal runtime', () => {
     } finally {
       if (previousArgv0 === undefined) delete process.env.ARGV0;
       else process.env.ARGV0 = previousArgv0;
+      await harness.runtime.shutdown();
+    }
+  });
+
+  it('removes the AppImage launcher entries from the PTY environment', async () => {
+    const previous = { APPDIR: process.env.APPDIR, LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH };
+    process.env.APPDIR = '/tmp/.mount_OpenChAbC123';
+    process.env.LD_LIBRARY_PATH = '/tmp/.mount_OpenChAbC123/usr/lib:/opt/cuda/lib64:';
+    const harness = createHarness();
+    try {
+      const response = createResponse();
+      await harness.routes.post.get('/api/terminal/create')({ body: { sessionId: 'term-ld-path', cwd: '/repo', cols: 80, rows: 24 } }, response);
+      expect(response.statusCode).toBe(200);
+      expect(harness.processes[0].options.env.LD_LIBRARY_PATH).toBe('/opt/cuda/lib64');
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
       await harness.runtime.shutdown();
     }
   });
@@ -696,6 +753,81 @@ describe('terminal runtime', () => {
       await harness.routes.delete.get('/api/terminal/:sessionId')({ params: { sessionId: 'term-1' } }, createResponse());
       expect(harness.processes[0].kills).toEqual(['SIGTERM', 'SIGKILL']);
     } finally { await harness.runtime.shutdown(); }
+  });
+
+  it('refuses a sandboxed page (Origin: null) even when the UI has no password', async () => {
+    const server = http.createServer();
+    const refused = [];
+    const runtime = createRuntime(server, {
+      rejectWebSocketUpgrade(socket, status) {
+        refused.push(status);
+        socket.write(`HTTP/1.1 ${status} Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+        socket.destroy();
+      },
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const socketUrl = `ws://127.0.0.1:${server.address().port}/api/terminal/ws`;
+    const handshake = (headers) => new Promise((resolve) => {
+      const socket = new WebSocket(socketUrl, { headers });
+      socket.once('open', () => { socket.close(); resolve('open'); });
+      socket.once('unexpected-response', (_req, res) => resolve(res.statusCode));
+      socket.once('error', () => resolve('error'));
+    });
+    try {
+      expect(await handshake({ Origin: 'null' })).toBe(403);
+      expect(refused).toEqual([403]);
+      // Native clients send no Origin and keep working without a password.
+      expect(await handshake({})).toBe('open');
+    } finally {
+      await runtime.shutdown();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('does not write an HTTP rejection onto a socket that already completed its upgrade', async () => {
+    const server = http.createServer();
+    const refused = [];
+    const logged = [];
+    const runtime = createRuntime(server, {
+      logger: { warn: (...args) => logged.push(args.join(' ')) },
+      rejectWebSocketUpgrade(socket, status, reason) {
+        refused.push({ status, reason });
+        if (!socket || socket.destroyed) return;
+        // Mirrors the real helper: it writes an HTTP status line, which is only
+        // valid before the handshake switches protocols.
+        try { socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`); } catch { /* closed */ }
+        try { socket.destroy(); } catch { /* closed */ }
+      },
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const socket = net.connect(port, '127.0.0.1');
+    await new Promise((resolve, reject) => {
+      socket.once('connect', resolve);
+      socket.once('error', reject);
+    });
+    let bytes = '';
+    socket.on('data', (chunk) => { bytes += chunk.toString('latin1'); });
+    try {
+      // First upgrade completes and writes the 101. The second one hits ws's
+      // "called more than once" throw, which used to land in the bare catch and
+      // append a 500 status line to a connection that is no longer HTTP.
+      const req = manualUpgradeRequest(port);
+      server.emit('upgrade', req, socket, Buffer.alloc(0));
+      server.emit('upgrade', req, socket, Buffer.alloc(0));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      // The socket was destroyed by the failure path, and no HTTP rejection was
+      // written for a connection that had already switched protocols.
+      expect(refused).toEqual([]);
+      expect(bytes).not.toContain('500');
+      // The upgrade error was not swallowed: it reached the logger.
+      expect(logged.some((line) => /terminal/i.test(line) && /upgrade/i.test(line))).toBe(true);
+    } finally {
+      socket.destroy();
+      await runtime.shutdown();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('runs snapshot-first attach, scoped I/O, replay, reconnect, and close over a real websocket', async () => {

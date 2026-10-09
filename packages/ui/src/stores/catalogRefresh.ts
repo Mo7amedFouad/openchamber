@@ -12,22 +12,39 @@
  */
 
 import type { CatalogKind } from "@/lib/opencode/events";
-import { invalidateAgentsLoadCache, useAgentsStore } from "@/stores/useAgentsStore";
+import { getConfigDirectory, invalidateAgentsLoadCache, useAgentsStore } from "@/stores/useAgentsStore";
 import { invalidateCommandsLoadCache, useCommandsStore } from "@/stores/useCommandsStore";
 import { invalidateSkillsLoadCache, useSkillsStore } from "@/stores/useSkillsStore";
 import { useSkillsCatalogStore } from "@/stores/useSkillsCatalogStore";
-import { useConfigStore } from "@/stores/useConfigStore";
+import { invalidateConfigAgentsLoad, useConfigStore } from "@/stores/useConfigStore";
 import { useMcpConfigStore } from "@/stores/useMcpConfigStore";
 import { usePluginsStore } from "@/stores/usePluginsStore";
 import { refreshWebSearchIfLoaded } from "@/stores/useWebSearchStore";
 
 const SOURCE = "catalogRefresh";
 
-const refreshAgents = async (): Promise<void> => {
+const refreshAgents = async (eventDirectories: readonly string[] = []): Promise<void> => {
+  const ambientDirectory = getConfigDirectory();
+  const scopedDirectories = Array.from(new Set(
+    eventDirectories
+      .map((directory) => directory.trim())
+      .filter((directory) => directory.length > 0 && directory !== "global" && directory !== ambientDirectory),
+  ));
+
   invalidateAgentsLoadCache();
+  invalidateConfigAgentsLoad();
+  for (const directory of scopedDirectories) {
+    invalidateAgentsLoadCache(directory);
+    invalidateConfigAgentsLoad(directory);
+  }
+
   await Promise.allSettled([
     useAgentsStore.getState().loadAgents(),
-    useConfigStore.getState().loadAgents({ source: SOURCE }),
+    useConfigStore.getState().loadAgents({ source: SOURCE, fresh: true }),
+    ...scopedDirectories.flatMap((directory) => [
+      useAgentsStore.getState().loadAgents(directory),
+      useConfigStore.getState().loadAgents({ directory, source: SOURCE, fresh: true }),
+    ]),
   ]);
 };
 
@@ -54,13 +71,14 @@ const refreshPlugins = async (): Promise<void> => {
 
 // The current list stays on screen until the fresh one lands: emptying it
 // first would blank the composer's model and effort pickers and every message
-// footer's effort label for the length of the request. `loadProviders` always
-// re-reads (its only short-circuit is an in-flight request for the same
-// directory) and keeps the existing objects when nothing changed.
+// footer's effort label for the length of the request. `loadProviders` keeps
+// the existing objects when nothing changed. The read is fresh: one already in
+// flight, say from opening a worktree, began before this change and can answer
+// with the catalog OpenCode just replaced.
 const refreshProviders = async (): Promise<void> => {
   const config = useConfigStore.getState();
   config.invalidateModelMetadataCache();
-  await config.loadProviders({ source: SOURCE });
+  await config.loadProviders({ source: SOURCE, fresh: true });
 };
 
 /**
@@ -81,10 +99,13 @@ const refreshProvidersAfterCredentialChange = async (): Promise<void> => {
 };
 
 /** The lists a catalog kind invalidates, in the order they are re-read. */
-export function catalogRefreshTasks(kind: CatalogKind): Array<() => Promise<void>> {
+export function catalogRefreshTasks(
+  kind: CatalogKind,
+  eventDirectories: readonly string[] = [],
+): Array<() => Promise<void>> {
   switch (kind) {
     case "agent":
-      return [refreshAgents];
+      return [() => refreshAgents(eventDirectories)];
     case "command":
       return [refreshCommands];
     case "skill":
@@ -105,7 +126,7 @@ export function catalogRefreshTasks(kind: CatalogKind): Array<() => Promise<void
     // opencode.json included), and OpenChamber's own plugin injection lives
     // in one, so the whole set is re-read.
     case "config":
-      return [refreshAgents, refreshCommands, refreshSkills, refreshMcp, refreshPlugins, refreshProviders, refreshWebSearchIfLoaded];
+      return [() => refreshAgents(eventDirectories), refreshCommands, refreshSkills, refreshMcp, refreshPlugins, refreshProviders, refreshWebSearchIfLoaded];
     // Projects are the sync layer's own slice; nothing in Settings reads them
     // through these stores.
     case "project":
@@ -115,8 +136,11 @@ export function catalogRefreshTasks(kind: CatalogKind): Array<() => Promise<void
   }
 }
 
-export async function refreshStoresForCatalogKind(kind: CatalogKind): Promise<void> {
-  const tasks = catalogRefreshTasks(kind);
+export async function refreshStoresForCatalogKind(
+  kind: CatalogKind,
+  eventDirectories: readonly string[] = [],
+): Promise<void> {
+  const tasks = catalogRefreshTasks(kind, eventDirectories);
   if (tasks.length === 0) return;
   await Promise.allSettled(tasks.map((task) => task()));
 }

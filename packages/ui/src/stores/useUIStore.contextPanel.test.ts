@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { CONTEXT_SURFACES, sortContextSurfaces } from '../lib/surfaces/registry';
+import {
+  forgetBrowserTabOpenedWithAddress,
+  subscribeBrowserTabLoadRequests,
+  wasBrowserTabOpenedWithAddress,
+} from '../lib/browser/devServerWait';
 import { useTerminalStore } from './useTerminalStore';
 import { useUIStore } from './useUIStore';
 
@@ -11,6 +16,41 @@ const originalPersistOptions = useUIStore.persist.getOptions();
 beforeEach(() => {
   useUIStore.setState({ contextPanelByDirectory: {}, contextRailOrder: [] });
   useTerminalStore.getState().clearAll();
+});
+
+describe('useUIStore preview file tabs', () => {
+  const fileTabs = () => getContextPanelTabs('/repo').filter((tab) => tab.mode === 'file');
+
+  test('a preview replaces the previous preview in its slot instead of adding a tab', () => {
+    const store = useUIStore.getState();
+    store.openContextFile('/repo', '/repo/kept.ts');
+    store.openContextFile('/repo', '/repo/a.ts', { preview: true });
+    store.openContextFile('/repo', '/repo/b.ts', { preview: true });
+
+    expect(fileTabs().map((tab) => [tab.targetPath, tab.preview])).toEqual([
+      ['/repo/kept.ts', false],
+      ['/repo/b.ts', true],
+    ]);
+    expect(useUIStore.getState().contextPanelByDirectory['/repo'].activeTabId).toBe(fileTabs()[1].id);
+  });
+
+  test('a regular open, an explicit pin, or a preview of an open file keeps the tab', () => {
+    const store = useUIStore.getState();
+    store.openContextFile('/repo', '/repo/a.ts', { preview: true });
+    store.openContextFile('/repo', '/repo/a.ts');
+    expect(fileTabs().map((tab) => tab.preview)).toEqual([false]);
+
+    store.openContextFile('/repo', '/repo/b.ts', { preview: true });
+    store.pinContextPanelTab('/repo', fileTabs()[1].id);
+    store.openContextFile('/repo', '/repo/c.ts', { preview: true });
+    store.openContextFile('/repo', '/repo/a.ts', { preview: true });
+
+    expect(fileTabs().map((tab) => [tab.targetPath, tab.preview])).toEqual([
+      ['/repo/a.ts', false],
+      ['/repo/b.ts', false],
+      ['/repo/c.ts', true],
+    ]);
+  });
 });
 
 describe('useUIStore context panel tabs', () => {
@@ -316,6 +356,74 @@ describe('useUIStore context panel tabs', () => {
     expect(terminalTab?.targetDirectory).toBe(null);
   });
 
+  test('a chat tab keeps its own session directory under the host directory', () => {
+    useUIStore.getState().openContextPanelTab('/repo', {
+      mode: 'chat',
+      dedupeKey: 'session:ses_1',
+      targetDirectory: '/other-project/',
+    });
+
+    const chatTab = getContextPanelTabs('/repo').find((tab) => tab.mode === 'chat');
+    expect(chatTab?.targetDirectory).toBe('/other-project');
+    expect(useUIStore.getState().contextPanelByDirectory['/other-project']).toBe(undefined);
+
+    // A chat tab opened without a directory carries none, and a mode that is
+    // neither terminal nor chat never does.
+    useUIStore.getState().openContextPanelTab('/repo', { mode: 'chat', dedupeKey: 'session:ses_2' });
+    useUIStore.getState().openContextPanelTab('/repo', { mode: 'diff', targetDirectory: '/other-project' });
+
+    const tabs = getContextPanelTabs('/repo');
+    expect(tabs.find((tab) => tab.dedupeKey === 'session:ses_2')?.targetDirectory).toBe(null);
+    expect(tabs.find((tab) => tab.mode === 'diff')?.targetDirectory).toBe(null);
+  });
+
+  test('persisted chat tabs keep a normalized session directory through rehydration', async () => {
+    const persistedTab = {
+      targetPath: null,
+      label: null,
+      sessionTitleFallback: null,
+      readOnly: false,
+      stagedDiff: false,
+      diffScope: null,
+      touchedAt: 1,
+    };
+    useUIStore.persist.setOptions({ storage: {
+      getItem: () => ({
+        version: 20,
+        state: {
+          contextPanelByDirectory: {
+            '/repo': {
+              isOpen: true,
+              expanded: false,
+              widthByMode: {},
+              touchedAt: 1,
+              activeTabId: 'chat:session:ses_1',
+              tabs: [
+                { ...persistedTab, id: 'chat:session:ses_1', mode: 'chat', dedupeKey: 'session:ses_1', targetDirectory: '/other-project/' },
+                { ...persistedTab, id: 'chat:session:ses_2', mode: 'chat', dedupeKey: 'session:ses_2', targetDirectory: 42 },
+                { ...persistedTab, id: 'diff', mode: 'diff', dedupeKey: 'diff', diffScope: 'working', targetDirectory: '/other-project' },
+              ],
+            },
+          },
+        },
+      }),
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    } });
+
+    try {
+      useUIStore.setState(useUIStore.getInitialState(), true);
+      await useUIStore.persist.rehydrate();
+
+      const tabs = getContextPanelTabs('/repo');
+      expect(tabs.find((tab) => tab.dedupeKey === 'session:ses_1')?.targetDirectory).toBe('/other-project');
+      expect(tabs.find((tab) => tab.dedupeKey === 'session:ses_2')?.targetDirectory).toBe(null);
+      expect(tabs.find((tab) => tab.mode === 'diff')?.targetDirectory).toBe(null);
+    } finally {
+      useUIStore.persist.setOptions(originalPersistOptions);
+    }
+  });
+
   test('reopening a terminal tab with null clears a previous target directory', () => {
     useUIStore.getState().openContextPanelTab('/repo-worktree', {
       mode: 'terminal',
@@ -443,6 +551,45 @@ describe('useUIStore context panel tabs', () => {
 
     const sanitizedDiffTab = getContextPanelTabs('/repo-worktree').find((tab) => tab.mode === 'diff');
     expect(sanitizedDiffTab?.targetDirectory).toBe(null);
+  });
+});
+
+describe('useUIStore browser tabs opened with an address', () => {
+  const url = 'http://localhost:5173/';
+  const tabID = `browser:${url}`;
+
+  test('a new tab counts as opened now, so its first load may wait for the server', () => {
+    forgetBrowserTabOpenedWithAddress('/repo', tabID);
+    useUIStore.getState().openContextPreview('/repo', url);
+    expect(wasBrowserTabOpenedWithAddress('/repo', tabID)).toBe(true);
+    expect(wasBrowserTabOpenedWithAddress('/other', tabID)).toBe(false);
+    forgetBrowserTabOpenedWithAddress('/repo', tabID);
+  });
+
+  test('opening the address of an existing tab asks that tab to load it again', () => {
+    useUIStore.getState().openContextBrowser('/repo', url);
+    forgetBrowserTabOpenedWithAddress('/repo', tabID);
+    const requested: string[] = [];
+    const elsewhere: string[] = [];
+    const stop = subscribeBrowserTabLoadRequests('/repo', tabID, (next) => requested.push(next));
+    const stopElsewhere = subscribeBrowserTabLoadRequests('/other', tabID, (next) => elsewhere.push(next));
+
+    useUIStore.getState().openContextPreview('/repo', url);
+    useUIStore.getState().openContextBrowser('/repo', url);
+
+    expect(requested).toEqual([url, url]);
+    expect(elsewhere).toEqual([]);
+    // Loaded through the request, not marked: a later remount still counts as restored.
+    expect(wasBrowserTabOpenedWithAddress('/repo', tabID)).toBe(false);
+    stop();
+    stopElsewhere();
+  });
+
+  test('an agent tab opened with an address counts as opened now', () => {
+    const agentTabID = useUIStore.getState().openAgentBrowserTab('/repo', url);
+    expect(agentTabID === null).toBe(false);
+    expect(wasBrowserTabOpenedWithAddress('/repo', agentTabID ?? '')).toBe(true);
+    forgetBrowserTabOpenedWithAddress('/repo', agentTabID ?? '');
   });
 });
 

@@ -58,6 +58,23 @@ describe('createWebFilesAPI', () => {
     });
   });
 
+  it('forwards respectGitignore only when the caller asks for it', async () => {
+    const { createWebFilesAPI } = await import('./files');
+    const api = createWebFilesAPI({ urls, getDirectory: () => '/workspace' });
+
+    runtimeFetchMock.mockResolvedValueOnce(Response.json({ path: '/workspace', entries: [] }));
+    await api.listDirectory('/workspace', { respectGitignore: true });
+    expect(runtimeFetchMock).toHaveBeenLastCalledWith('/api/fs/list', expect.objectContaining({
+      query: new URLSearchParams({ path: '/workspace', respectGitignore: 'true' }),
+    }));
+
+    runtimeFetchMock.mockResolvedValueOnce(Response.json({ path: '/workspace', entries: [] }));
+    await api.listDirectory('/workspace');
+    expect(runtimeFetchMock).toHaveBeenLastCalledWith('/api/fs/list', expect.objectContaining({
+      query: new URLSearchParams({ path: '/workspace' }),
+    }));
+  });
+
   it('uses per-call workspace directory for stat and read requests', async () => {
     const { createWebFilesAPI } = await import('./files');
     const api = createWebFilesAPI({ urls, getDirectory: () => '/stale-workspace' });
@@ -187,5 +204,24 @@ describe('createWebFilesAPI', () => {
     await api.downloadFile?.('/workspace/hello.txt');
 
     expect(share).toHaveBeenCalledWith({ files: [expect.objectContaining({ name: 'hello.txt', type: 'text/plain' })] });
+  });
+
+  it('hands downloads to the native FileShare plugin on Android, where WebView has no Web Share API', async () => {
+    const { createWebFilesAPI } = await import('./files');
+    const api = createWebFilesAPI({ urls, getDirectory: () => '/workspace' });
+    const share = vi.fn().mockResolvedValue(undefined);
+    const registerPlugin = vi.fn(() => ({ share }));
+    vi.stubGlobal('window', globalThis);
+    vi.stubGlobal('navigator', {});
+    Object.defineProperty(window, 'Capacitor', {
+      configurable: true,
+      value: { isNativePlatform: () => true, getPlatform: () => 'android', registerPlugin },
+    });
+    runtimeFetchMock.mockResolvedValueOnce(new Response('hello', { headers: { 'Content-Type': 'text/plain' } }));
+
+    await api.downloadFile?.('/workspace/hello.txt');
+
+    expect(registerPlugin).toHaveBeenCalledWith('FileShare');
+    expect(share).toHaveBeenCalledWith({ fileName: 'hello.txt', mimeType: 'text/plain', data: btoa('hello') });
   });
 });

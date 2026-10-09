@@ -9,6 +9,8 @@ import { raiseSessionOrderingBaselines } from '@/sync/session-ordering';
 import { mapWithConcurrency } from '@/lib/concurrency';
 import { persistManagedChatSessions, readManagedChatSessions } from '@/sync/persist-cache';
 import { isVSCodeRuntime } from '@/lib/desktop';
+import { spaceIdOfDirectory } from '@/lib/spaces/space-route';
+import { useSpacesStore, type SpaceMark } from '@/lib/spaces/spaces-store';
 import { ensureChatsRootDirectory, getChatsRootForHome } from '@/lib/chatDirectories';
 import { countSyncPerformance } from '@/sync/performance-diagnostics';
 import {
@@ -89,11 +91,6 @@ let mergingSessionPage = false;
 // Bumped on runtime switch: an in-flight load from the previous instance must
 // not apply its (stale) snapshot after the reset.
 let loadGeneration = 0;
-
-export const mergeLiveSessionWithGlobalSession = (
-  liveSession: Session,
-  globalSession: Session,
-): Session => mergeSessionDirectoryMetadata(liveSession, globalSession);
 
 const buildSessionsByDirectory = (sessions: Session[]): Map<string, Session[]> => {
   const next = new Map<string, Session[]>();
@@ -314,6 +311,25 @@ const mergeSessionLists = (existing: Session[], incoming?: Session[]): Session[]
   });
 
   return ordered;
+};
+
+/**
+ * Adds the live directory-store sessions this list does not hold yet.
+ *
+ * A record already held, active or archived, always stands: this list hears
+ * every session event and action result itself, while a directory store can
+ * keep an old copy of a session it does not own. Letting that copy win put
+ * sessions the user had marked done back under "In work".
+ */
+const addUnlistedLiveSessions = (active: Session[], archived: Session[], live?: Session[]): Session[] => {
+  if (!live || live.length === 0) return active;
+  const listed = new Set([...active, ...archived].map((session) => session.id));
+  const unlisted = live.filter((session) => {
+    if (listed.has(session.id)) return false;
+    listed.add(session.id);
+    return true;
+  });
+  return unlisted.length > 0 ? [...active, ...unlisted] : active;
 };
 
 const applySnapshot = (
@@ -691,8 +707,11 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
         // soon as it lands and keep loading the rest silently; the complete
         // snapshot below is still the only authoritative result.
         let firstPageMerged = false;
+        // The marks of the isolated spaces the host merged in, applied with the snapshot below.
+        let spaceMarks: SpaceMark[] = [];
         const allSessions = await listGlobalSessionPages(listSessionPage, {
           pageSize: PAGE_SIZE,
+          onSpaces: (spaces) => { spaceMarks = spaces ?? []; },
           onPage: (page) => {
             if (firstPageMerged || generation !== loadGeneration) return;
             firstPageMerged = true;
@@ -712,6 +731,9 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
           return { activeSessions: [], archivedSessions: [] };
         }
         const { active, archived } = splitGlobalSessionsByArchived(allSessions);
+        // The marks first: a reader of the snapshot that asks which space a record belongs to
+        // must find the space that listed it.
+        useSpacesStore.getState().applyMarks(spaceMarks);
         set((state) => {
           const reconciled = overlayMutationsSince(state, active, archived, baselineRevision);
           return applySnapshot(state, reconciled.activeSessions, reconciled.archivedSessions, 'ready');
@@ -734,7 +756,7 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
         set((state) => {
           const reconciled = overlayMutationsSince(
             state,
-            mergeSessionLists(state.activeSessions, fallbackActive),
+            addUnlistedLiveSessions(state.activeSessions, state.archivedSessions, fallbackActive),
             state.archivedSessions,
             baselineRevision,
           );
@@ -786,20 +808,25 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
     if (fetched.errors.length > 0) {
       console.warn('[GlobalSessions] Failed to refresh sessions for some directories:', fetched.errors[0]);
     }
+    // A space that answered a directory read is reachable again, whatever the last global list said.
+    for (const directory of fetched.directories) {
+      const spaceId = spaceIdOfDirectory(directory);
+      if (spaceId !== null) useSpacesStore.getState().noteReachable(spaceId);
+    }
 
     const { active, archived } = splitGlobalSessionsByArchived(fetched.sessions);
     const refreshedActiveIds = active.map((session) => session.id);
 
     set((state) => {
-      let nextActiveSessions = replaceSessionsForDirectories(state.activeSessions, active, fetched.directories);
-      nextActiveSessions = mergeSessionLists(nextActiveSessions, fallbackActive);
-      if (sameSessionList(state.activeSessions, nextActiveSessions)) {
-        nextActiveSessions = state.activeSessions;
-      }
-
       let nextArchivedSessions = replaceSessionsForDirectories(state.archivedSessions, archived, fetched.directories);
       if (sameSessionList(state.archivedSessions, nextArchivedSessions)) {
         nextArchivedSessions = state.archivedSessions;
+      }
+
+      let nextActiveSessions = replaceSessionsForDirectories(state.activeSessions, active, fetched.directories);
+      nextActiveSessions = addUnlistedLiveSessions(nextActiveSessions, nextArchivedSessions, fallbackActive);
+      if (sameSessionList(state.activeSessions, nextActiveSessions)) {
+        nextActiveSessions = state.activeSessions;
       }
 
       const reconciled = overlayMutationsSince(state, nextActiveSessions, nextArchivedSessions, baselineRevision);

@@ -14,14 +14,13 @@
  * it survives compaction: the tab goes on believing the agent still has context
  * that has just been summarised away.
  */
+import { isRecord } from '../shared/guards.js';
 
 const KNOWLEDGE_METADATA_KEY = 'knowledge_context_delivered';
 const PINS_METADATA_KEY = 'project_context_pins';
 
 /** Total budget for the assembled block; anything past it is cut, loudly. */
 const KNOWLEDGE_MAX_LENGTH = 8000;
-
-const isRecord = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
 const truncate = (value, budget) => (
   value.length <= budget ? value : `${value.slice(0, Math.max(0, budget - 1))}…`
@@ -31,7 +30,7 @@ const truncate = (value, budget) => (
  * Identity of everything the session should be carrying, content revisions
  * included: editing a pinned note must re-send it, not merely renaming one.
  */
-export const buildKnowledgeSignature = ({ notes, plans, memory }) => {
+export const buildKnowledgeSignature = ({ notes, plans, memory, linking = false }) => {
   const parts = [
     ...notes.map((note) => `n:${note.id}:${note.updatedAt}`),
     ...plans.map((plan) => `p:${plan.id}:${plan.title}`),
@@ -40,6 +39,7 @@ export const buildKnowledgeSignature = ({ notes, plans, memory }) => {
     // Memory being on is itself worth telling a session: without it an empty
     // store sends nothing, and an agent never told when to save never does.
     ...(memory.enabled ? [`m:on:${memory.complete ? 'c' : 'p'}`] : []),
+    ...(linking ? ['l:on'] : []),
   ];
   return parts.length === 0 ? '' : parts.sort().join('|');
 };
@@ -62,6 +62,18 @@ const MEMORY_SAVE_GUIDANCE = 'You have memory that persists across sessions, thr
   + ' effort to find and is not in the code or docs. One fact per entry. The user'
   + ' can review and remove what you save, so save when it fits and mention it'
   + ' briefly.';
+
+/**
+ * When to link, stated in every session that has the `openchamber` tool. The
+ * same rule leads that tool's description; stated only there, an agent given
+ * an issue to investigate never opened the tool and so never linked it.
+ * The tool description states the same rule; change both together.
+ */
+export const SESSION_LINK_GUIDANCE = "When the user gives you an issue or a change under"
+  + " review (a pull or merge request) to work on, fix, investigate or review, when you"
+  + " open one for this work, and when the work resolves one, link it to this session"
+  + " with the openchamber tool's session.link as soon as you know it, so the user"
+  + " sees it with the session. Not one merely mentioned in passing.";
 
 /**
  * Titles only for memory, never bodies: an index carrying full text grows
@@ -121,8 +133,12 @@ const buildPinnedBlock = ({ notes, plans }) => {
   ].join('\n\n');
 };
 
-export const buildKnowledgeText = ({ notes, plans, memory }) => {
-  const blocks = [buildPinnedBlock({ notes, plans }), buildMemoryBlock(memory)].filter(Boolean);
+export const buildKnowledgeText = ({ notes, plans, memory, linking = false }) => {
+  const blocks = [
+    buildPinnedBlock({ notes, plans }),
+    buildMemoryBlock(memory),
+    linking ? SESSION_LINK_GUIDANCE : '',
+  ].filter(Boolean);
   if (blocks.length === 0) return '';
 
   const assembled = blocks.join('\n\n');
@@ -137,6 +153,8 @@ export const createSessionKnowledgeRuntime = (dependencies) => {
     agentMemoryRuntime,
     resolveProjectId,
     isAgentMemoryEnabled,
+    // Whether this session's agent has the `openchamber` tool to link with.
+    isSessionLinkingAvailable = null,
     // Pins and the delivered-signature cursor live in OpenChamber's own session
     // metadata store: OpenCode 2.x accepts session metadata only at create time.
     readSessionMetadata = null,
@@ -218,7 +236,11 @@ export const createSessionKnowledgeRuntime = (dependencies) => {
       }
     }
 
-    return { notes, plans, memory };
+    const linking = typeof isSessionLinkingAvailable === 'function'
+      ? await Promise.resolve(isSessionLinkingAvailable()).catch(() => false)
+      : false;
+
+    return { notes, plans, memory, linking };
   };
 
   /**

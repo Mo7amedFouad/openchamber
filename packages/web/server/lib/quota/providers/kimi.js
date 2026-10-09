@@ -1,4 +1,4 @@
-import { readAuthFile } from '../../opencode/auth.js';
+import { readOpenCodeCredentials } from '../../opencode/auth.js';
 import {
   getAuthEntry,
   normalizeAuthEntry,
@@ -7,12 +7,49 @@ import {
   toNumber,
   toTimestamp,
   durationToLabel,
-  durationToSeconds
+  durationToSeconds,
+  asNonEmptyString,
+  formatMoney,
+  asObject
 } from '../utils/index.js';
+
+const MOONSHOT_BALANCE_URL = 'https://api.moonshot.ai/v1/users/me/balance';
+
+// A pay-as-you-go Moonshot platform key (prepaid vouchers, no Kimi Code
+// subscription) is refused by the Kimi Code usage address. Its balance is read
+// from the platform instead: USD, what remains, with no spent figure.
+// Resolves to the credits_balance windows, or null when they cannot be read.
+const fetchMoonshotBalanceWindows = async (apiKey, fetchImpl) => {
+  try {
+    const response = await fetchImpl(MOONSHOT_BALANCE_URL, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15_000)
+    });
+    if (!response.ok) return null;
+    const balance = asObject(asObject(await response.json())?.data)?.available_balance;
+    if (!Number.isFinite(balance)) return null;
+    return {
+      credits_balance: toUsageWindow({
+        usedPercent: null,
+        windowSeconds: null,
+        resetAt: null,
+        valueLabel: `$${formatMoney(balance)}`
+      })
+    };
+  } catch {
+    return null;
+  }
+};
 
 export const providerId = 'kimi-for-coding';
 export const providerName = 'Kimi for Coding';
-const aliases = ['kimi-for-coding', 'kimi', 'kimi-code-plan-global'];
+// OpenCode stores the Kimi For Coding plans as `kimi-code-plan-cn` (kimi.com)
+// and `kimi-code-plan-global` (kimi.ai). The China plan comes first: its key
+// works at the api.kimi.com usage address, and a pre-split `kimi-for-coding`
+// key left behind with a dead credential must not shadow it. The global plan
+// stays last, as before, since its key is not known to work at that address.
+const aliases = ['kimi-code-plan-cn', 'kimi-for-coding', 'kimi', 'kimi-code-plan-global'];
 
 // Kimi's weekly `usage` block reports `used`; its rate-limit `limits[].detail`
 // blocks report `remaining` instead. Neither field is guaranteed present, so
@@ -28,16 +65,15 @@ const computeUsedPercent = (total, used, remaining) => {
   return null;
 };
 
-export const isConfigured = () => {
-  const auth = readAuthFile();
+const getApiKey = (auth) => {
   const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
-  return Boolean(entry?.key || entry?.token);
+  return asNonEmptyString(entry?.key) ?? asNonEmptyString(entry?.token);
 };
 
-export const fetchQuota = async () => {
-  const auth = readAuthFile();
-  const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
-  const apiKey = entry?.key ?? entry?.token;
+export const isConfigured = (auth) => Boolean(getApiKey(auth));
+
+export const fetchQuota = async ({ readAuth = readOpenCodeCredentials, fetchImpl = fetch } = {}) => {
+  const apiKey = getApiKey(await readAuth());
 
   if (!apiKey) {
     return buildResult({
@@ -50,7 +86,7 @@ export const fetchQuota = async () => {
   }
 
   try {
-    const response = await fetch('https://api.kimi.com/coding/v1/usages', {
+    const response = await fetchImpl('https://api.kimi.com/coding/v1/usages', {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -59,6 +95,18 @@ export const fetchQuota = async () => {
     });
 
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        const balanceWindows = await fetchMoonshotBalanceWindows(apiKey, fetchImpl);
+        if (balanceWindows) {
+          return buildResult({
+            providerId,
+            providerName,
+            ok: true,
+            configured: true,
+            usage: { windows: balanceWindows }
+          });
+        }
+      }
       return buildResult({
         providerId,
         providerName,

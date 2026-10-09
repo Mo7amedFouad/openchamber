@@ -1,5 +1,5 @@
 import React from 'react';
-import { useSessionTurnActive } from '@/sync/global-session-status';
+import { useSessionTurnActivity } from '@/sync/global-session-status';
 import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
 import {
   DndContext,
@@ -37,8 +37,24 @@ import { useGlobalSessionsStore, resolveGlobalSessionDirectory } from '@/stores/
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSessionUnseenCount } from '@/sync/notification-store';
 import { useIsSessionAiRenamePending } from '@/sync/use-session-ai-rename';
+import { useMultiRunMemberIds } from '@/lib/multirun/useMultiRuns';
 
 const restrictToXAxis: Modifier = ({ transform }) => ({ ...transform, y: 0 });
+
+// Firefox can report wheel deltas in lines rather than pixels.
+const WHEEL_LINE_PIXELS = 16;
+
+/**
+ * Mouse wheels scroll vertically, so the strip maps vertical wheel movement to
+ * horizontal scrolling. Horizontal gestures (trackpad swipes, Shift+wheel)
+ * already scroll it natively, and Ctrl/Cmd+wheel stays with zoom.
+ */
+const scrollTabsWithWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+  if (event.shiftKey || event.ctrlKey || event.metaKey) return;
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+  const delta = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * WHEEL_LINE_PIXELS : event.deltaY;
+  event.currentTarget.scrollLeft += delta;
+};
 
 type SessionTab = { id: string; session: Session };
 
@@ -109,13 +125,11 @@ const SessionTabItem: React.FC<{
 
   // Session state for the dot and the hover tooltip.
   const isAiRenaming = useIsSessionAiRenamePending(tab.id, resolveGlobalSessionDirectory(tab.session));
-  const isStreaming = useSessionTurnActive(tab.id);
+  const turnActivity = useSessionTurnActivity(tab.id);
+  const isStreaming = turnActivity !== null;
   const unseenCount = useSessionUnseenCount(tab.id);
   const showUnread = unseenCount > 0 && !isActive && !isStreaming;
   const showDot = isStreaming || showUnread;
-  const dotLabel = isStreaming
-    ? t('sessions.sidebar.session.status.active')
-    : t('sessions.sidebar.session.status.unread');
 
   const menuArgsFor = (components: SessionTabMenuComponents): SessionTabMenuArgs => ({
     session: tab.session,
@@ -130,7 +144,7 @@ const SessionTabItem: React.FC<{
     <div
       ref={setNodeRef}
       style={{ transform: DndCSS.Translate.toString(transform), transition }}
-      className={cn('session-tab-slot flex h-7 w-44 shrink-0 touch-none', isDragging && 'z-10 opacity-60')}
+      className={cn('app-region-no-drag session-tab-slot flex h-7 w-44 shrink-0 touch-none', isDragging && 'z-10 opacity-60')}
       data-active={isActive ? 'true' : 'false'}
       {...(isActive ? { 'data-active-session-tab': true } : {})}
       {...attributes}
@@ -194,7 +208,7 @@ const SessionTabItem: React.FC<{
                           its content. */}
                       {isActive ? children : (
                         <div className="flex min-w-0 flex-col justify-center">
-                          <span className="block max-w-full overflow-hidden whitespace-nowrap text-[13px] font-medium leading-4">{title}</span>
+                          <span dir="auto" className="block max-w-full overflow-hidden whitespace-nowrap text-left text-[13px] font-medium leading-4">{title}</span>
                         </div>
                       )}
                     </div>
@@ -202,8 +216,7 @@ const SessionTabItem: React.FC<{
                       <Icon name="loader-4" className="ml-1.5 size-3 shrink-0 animate-spin text-primary" aria-label={t('sessions.aiRename.generating')} />
                     ) : showDot ? (
                       <SessionActivityIndicator
-                        state={isStreaming ? 'running' : 'unread'}
-                        label={dotLabel}
+                        state={turnActivity ?? 'unread'}
                         className={cn('ml-1.5 shrink-0', !suppressControls && 'group-hover/session-tab:opacity-0', overlayVisible && 'opacity-0')}
                       />
                     ) : null}
@@ -301,10 +314,12 @@ export const SessionTabsStrip: React.FC<{
   const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
   const activeSessions = useGlobalSessionsStore((state) => state.activeSessions);
 
-  // Opening a session anywhere (sidebar, palette, deep link) adds its tab.
+  // Opening a session anywhere (sidebar, palette, deep link) adds its tab. The
+  // lanes of one multi-run share a tab: opening another lane reuses it.
+  const currentRunMemberIds = useMultiRunMemberIds(currentSessionId);
   React.useEffect(() => {
-    if (currentSessionId) ensureTab(currentSessionId);
-  }, [currentSessionId, ensureTab]);
+    if (currentSessionId) ensureTab(currentSessionId, currentRunMemberIds);
+  }, [currentSessionId, currentRunMemberIds, ensureTab]);
 
   const sessionsById = React.useMemo(() => {
     const map = new Map<string, Session>();
@@ -391,10 +406,11 @@ export const SessionTabsStrip: React.FC<{
   const showDraftPill = !currentSessionId || !tabs.some((tab) => tab.id === currentSessionId);
 
   return (
-    <div className="app-region-no-drag flex h-full min-w-0 flex-1 items-center" role="tablist" aria-label={t('header.sessionTabs.stripAria')}>
+    <div className="flex h-full min-w-0 flex-1 items-center" role="tablist" aria-label={t('header.sessionTabs.stripAria')}>
       <div
         ref={scrollRef}
         onScroll={updateEdges}
+        onWheel={scrollTabsWithWheel}
         className="session-tabs-scroll flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto overscroll-x-contain"
         style={maskImage ? { maskImage, WebkitMaskImage: maskImage } : undefined}
       >
@@ -426,7 +442,7 @@ export const SessionTabsStrip: React.FC<{
           <div
             role="tab"
             aria-selected
-            className="session-tab-slot flex h-7 w-44 shrink-0 items-center rounded-md bg-interactive-selection px-2"
+            className="app-region-no-drag session-tab-slot flex h-7 w-44 shrink-0 items-center rounded-md bg-interactive-selection px-2"
             data-active="true"
           >
             <div className="min-w-0 flex-1">{children}</div>

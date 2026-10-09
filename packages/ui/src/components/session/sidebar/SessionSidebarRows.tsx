@@ -1,10 +1,13 @@
 import React from 'react';
-import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
+import { defaultRangeExtractor, measureElement, useVirtualizer, type Virtualizer } from '@tanstack/react-virtual';
 import type { SessionSidebarRow, SessionSidebarRowModel } from './sessionSidebarRowModel';
 import {
+  estimateSessionSidebarRowSize,
   findFirstVisibleSessionSidebarRowIndex,
   getInitialSessionSidebarRowIndexes,
   mergeSessionSidebarVirtualIndexes,
+  sectionSpacingAfter,
+  sessionSidebarRowSizeKey,
 } from './sessionSidebarVirtualization';
 
 type Props = {
@@ -15,13 +18,6 @@ type Props = {
   onFirstVisibleIndexChange: (index: number) => void;
 };
 
-function sectionSpacingAfter(row: SessionSidebarRow, nextRow: SessionSidebarRow | undefined): string | undefined {
-  const startsSection = nextRow?.kind === 'activity-header'
-    || nextRow?.kind === 'project-header'
-    || (nextRow?.kind === 'group-header' && row.kind !== 'project-header');
-  return startsSection ? 'pb-2' : undefined;
-}
-
 export function SessionSidebarRows({
   model,
   scrollElement,
@@ -31,7 +27,25 @@ export function SessionSidebarRows({
 }: Props): React.ReactNode {
   const rows = model.rows;
   const getScrollElement = React.useCallback(() => scrollElement, [scrollElement]);
-  const estimateSize = React.useCallback((index: number) => rows[index]?.estimateSize ?? 32, [rows]);
+  const measuredSizeByKeyRef = React.useRef(new Map<string, number>());
+  const estimateSize = React.useCallback((index: number) => {
+    const row = rows[index];
+    if (!row) return 32;
+    const nextRow = rows[index + 1];
+    return measuredSizeByKeyRef.current.get(sessionSidebarRowSizeKey(row, nextRow))
+      ?? estimateSessionSidebarRowSize(row, nextRow);
+  }, [rows]);
+  const measureRow = React.useCallback((
+    element: HTMLDivElement,
+    entry: ResizeObserverEntry | undefined,
+    instance: Virtualizer<HTMLElement, HTMLDivElement>,
+  ) => {
+    const size = measureElement(element, entry, instance);
+    const index = instance.indexFromElement(element);
+    const row = rows[index];
+    if (row) measuredSizeByKeyRef.current.set(sessionSidebarRowSizeKey(row, rows[index + 1]), size);
+    return size;
+  }, [rows]);
   const getItemKey = React.useCallback((index: number) => rows[index]?.key ?? index, [rows]);
   const rangeExtractor = React.useCallback((range: Parameters<typeof defaultRangeExtractor>[0]) => {
     return mergeSessionSidebarVirtualIndexes(defaultRangeExtractor(range), pinnedRowIndexes, rows.length);
@@ -42,6 +56,7 @@ export function SessionSidebarRows({
     enabled: scrollElement !== null,
     getScrollElement,
     estimateSize,
+    measureElement: measureRow,
     getItemKey,
     overscan: 8,
     rangeExtractor,

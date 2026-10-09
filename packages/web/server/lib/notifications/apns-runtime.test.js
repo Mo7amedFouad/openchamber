@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createApnsRuntime } from './apns-runtime.js';
+import { openPushContent } from './push-seal.js';
 
 // A real P-256 key so the ES256 signing path (direct mode) runs for real.
 const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
@@ -27,9 +28,25 @@ const createMemoryFs = () => {
   };
 };
 
+// In-memory relay key store: the auto-generated signing keypair persists and
+// reads back; `generations` counts how many keypairs were minted.
+const makeMemoryKeyStore = () => {
+  const slots = {};
+  const store = {
+    generations: 0,
+    getOrCreate: async (slot, generate) => {
+      if (!slots[slot]) {
+        store.generations += 1;
+        slots[slot] = await generate();
+      }
+      return slots[slot];
+    },
+  };
+  return store;
+};
+
 const makeDeps = (overrides = {}) => {
-  // Stateful settings so the auto-generated relay signing keypair persists + reads back.
-  let settings = {};
+  const settings = {};
   return {
     fsPromises: createMemoryFs(),
     path: { dirname: () => '/tmp' },
@@ -37,7 +54,7 @@ const makeDeps = (overrides = {}) => {
     http2: { connect: vi.fn(() => { throw new Error('http2 must not be used in relay mode'); }) },
     APNS_TOKENS_FILE_PATH: '/tmp/apns-tokens.json',
     readSettingsFromDiskMigrated: vi.fn(async () => settings),
-    writeSettingsToDisk: vi.fn(async (next) => { settings = next; }),
+    relayKeyStore: makeMemoryKeyStore(),
     ...overrides,
   };
 };
@@ -143,7 +160,7 @@ describe('apns runtime relay mode (default)', () => {
     expect(keys.length).toBeGreaterThanOrEqual(2);
     expect(keys.every((k) => k.x === keys[0].x && k.y === keys[0].y)).toBe(true);
     // Keypair was generated + persisted exactly once.
-    expect(deps.writeSettingsToDisk).toHaveBeenCalledTimes(1);
+    expect(deps.relayKeyStore.generations).toBe(1);
   });
 
   it('honors an explicit sandbox environment override for every token', async () => {
@@ -178,6 +195,34 @@ describe('apns runtime relay mode (default)', () => {
     const byEnv = Object.fromEntries(sends.map((s) => [s.env, new Set(s.tokens)]));
     expect(byEnv.sandbox).toEqual(new Set(['tokenXcode']));
     expect(byEnv.production).toEqual(new Set(['tokenStore', 'tokenLegacy']));
+  });
+
+  it('seals the text for a device that gave a key, and only for that device', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true, results: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.OPENCHAMBER_PUSH_RELAY_URL = 'https://relay.test/v1/push/send';
+    const pushKey = crypto.randomBytes(32).toString('base64');
+
+    const runtime = createApnsRuntime(makeDeps());
+    await runtime.addOrUpdateApnsToken('s1', 'tokenSealed', undefined, 'ios', 'production', pushKey);
+    await runtime.addOrUpdateApnsToken('s2', 'tokenPlain', undefined, 'ios', 'production');
+
+    fetchMock.mockClear();
+    await runtime.sendApnsToAllUiSessions({ title: 'Agent response is ready', body: 'Fix the login bug', data: { sessionId: 'ses_1' } });
+
+    const sends = fetchMock.mock.calls.filter(isSend).map(([, init]) => JSON.parse(init.body));
+    const sealed = sends.find((send) => send.tokens.includes('tokenSealed'));
+    const plain = sends.find((send) => send.tokens.includes('tokenPlain'));
+    // The relay sees no session name for the sealed device...
+    expect(sealed.tokens).toEqual(['tokenSealed']);
+    expect(sealed.body).toBe('');
+    expect(JSON.stringify(sealed)).not.toContain('Fix the login bug');
+    expect(sealed.data.sessionId).toBe('ses_1');
+    // ...and the phone opens it with its key.
+    expect(openPushContent(pushKey, sealed.data.enc)).toEqual({ title: 'Agent response is ready', body: 'Fix the login bug' });
+    // An app without a key keeps getting the text as before.
+    expect(plain.body).toBe('Fix the login bug');
+    expect(plain.data.enc).toBeUndefined();
   });
 
   it('no-ops (no relay call) when no tokens are registered', async () => {

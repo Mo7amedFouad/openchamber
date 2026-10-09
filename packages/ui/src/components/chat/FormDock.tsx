@@ -1,4 +1,5 @@
 import React from 'react';
+import { AnimatePresence } from 'motion/react';
 import type { FormField } from '@opencode/client';
 import { ComposerFloatingPanel } from './composer/ui/ComposerFloatingPanel';
 import { Button } from '@/components/ui/button';
@@ -12,6 +13,8 @@ import type { FormRequest } from '@/lib/opencode/model';
 import { readWebSearchConsent } from '@/lib/opencode/websearch';
 import { useUIStore } from '@/stores/useUIStore';
 import { useScopedBlockingForms, useSessions } from '@/sync/sync-context';
+import { useRequestReveal } from '@/sync/request-reveal';
+import { useChatSessionSelection } from './chatColumnSession';
 import * as sessionActions from '@/sync/session-actions';
 import { useMobileAutocompleteMaxHeight } from './useMobileAutocompleteMaxHeight';
 import { FormFieldControl } from './FormFieldControl';
@@ -60,11 +63,33 @@ export const FormDock: React.FC<FormDockProps> = ({ sessionId, directory, hidden
     // elicitation, owned by no session) follows and shows in every session
     // of the directory that raised it.
     const form = forms[0];
-    if (hidden || !form) return null;
-    const webSearchConsent = readWebSearchConsent(form);
-    if (webSearchConsent) return <WebSearchConsentDock key={form.id} form={form} consent={webSearchConsent} />;
-    // Keyed on the form id so a different request starts from a clean slate.
-    return <FormDockPanel key={form.id} form={form} waiting={forms.length - 1} />;
+    const webSearchConsent = form ? readWebSearchConsent(form) : null;
+    // Keyed on the form id so a different request starts from a clean slate
+    // (and the panels cross-fade instead of swapping content in place).
+    return (
+        <AnimatePresence>
+            {hidden || !form ? null : webSearchConsent
+                ? <WebSearchConsentDock key={form.id} form={form} consent={webSearchConsent} />
+                : <FormDockPanel key={form.id} form={form} forms={forms} />}
+        </AnimatePresence>
+    );
+};
+
+type FormDraft = { fieldsSignature: string; values: FormValues; step: number };
+
+// Answers in progress outlive the panel: switching sessions unmounts it, and
+// coming back must find the form where it was left. Kept in memory only and
+// dropped once the form is answered or dismissed.
+const formDrafts = new Map<string, FormDraft>();
+const MAX_FORM_DRAFTS = 50;
+
+const saveFormDraft = (formId: string, draft: FormDraft) => {
+    formDrafts.delete(formId);
+    formDrafts.set(formId, draft);
+    if (formDrafts.size > MAX_FORM_DRAFTS) {
+        const oldest = formDrafts.keys().next().value;
+        if (oldest !== undefined) formDrafts.delete(oldest);
+    }
 };
 
 const isStepAnswered = (field: FormField, values: FormValues): boolean => {
@@ -74,28 +99,47 @@ const isStepAnswered = (field: FormField, values: FormValues): boolean => {
     return !(Array.isArray(answer) && answer.length === 0);
 };
 
-const FormDockPanel: React.FC<{ form: FormRequest; waiting: number }> = ({ form, waiting }) => {
+const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[] }> = ({ form, forms }) => {
     const { t } = useI18n();
     const isMobile = useUIStore((state) => state.isMobile);
-    const sessions = useSessions();
+    // The sessions of the chat this dock belongs to, which may be a chat of
+    // another project pinned in the side panel.
+    const sessions = useSessions(useChatSessionSelection().directory ?? undefined);
     const bodyRef = React.useRef<HTMLDivElement | null>(null);
 
     const fields = form.fields;
-    const [values, setValues] = React.useState<FormValues>(() => initialFormValues(fields));
-    const [step, setStep] = React.useState(0);
-    const [collapsed, setCollapsed] = React.useState(false);
-    const [isResponding, setIsResponding] = React.useState(false);
-    const [showErrors, setShowErrors] = React.useState(false);
-
     // A rebuilt pending list hands over a new object with the same content;
     // only fields that actually changed start the answers over.
     const fieldsSignature = fields.map((field) => `${field.key}:${field.type}`).join('|');
+    const [restored] = React.useState(() => {
+        const draft = formDrafts.get(form.id);
+        return draft?.fieldsSignature === fieldsSignature ? draft : null;
+    });
+    const [values, setValues] = React.useState<FormValues>(() => restored?.values ?? initialFormValues(fields));
+    const [step, setStep] = React.useState(restored?.step ?? 0);
+    const [collapsed, setCollapsed] = React.useState(false);
+    const [isResponding, setIsResponding] = React.useState(false);
+    const [showErrors, setShowErrors] = React.useState(false);
+    const waiting = forms.length - 1;
+    // "Open session" on a question's toast expands the dock, including for a
+    // question queued behind the one shown.
+    const formIds = React.useMemo(() => forms.map((item) => item.id), [forms]);
+    useRequestReveal(formIds, React.useCallback(() => setCollapsed(false), []));
+
+    const appliedSignatureRef = React.useRef(fieldsSignature);
     React.useEffect(() => {
+        if (appliedSignatureRef.current === fieldsSignature) return;
+        appliedSignatureRef.current = fieldsSignature;
         setValues(initialFormValues(fields));
         setStep(0);
         setShowErrors(false);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [fieldsSignature]);
+
+    React.useEffect(() => {
+        if (appliedSignatureRef.current !== fieldsSignature) return;
+        saveFormDraft(form.id, { fieldsSignature, values, step });
+    }, [fieldsSignature, form.id, step, values]);
 
     const isFromSubagent = React.useMemo(() => {
         const source = sessions.find((session) => session.id === form.sessionID);
@@ -146,6 +190,7 @@ const FormDockPanel: React.FC<{ form: FormRequest; waiting: number }> = ({ form,
         setIsResponding(true);
         try {
             await sessionActions.replyToForm(form.sessionID, form.id, buildFormAnswer(fields, values));
+            formDrafts.delete(form.id);
         } catch {
             toast.error(t('chat.formCard.submitFailed'), { description: t('chat.formCard.tryAgain') });
         } finally {
@@ -157,6 +202,7 @@ const FormDockPanel: React.FC<{ form: FormRequest; waiting: number }> = ({ form,
         setIsResponding(true);
         try {
             await sessionActions.cancelForm(form.sessionID, form.id);
+            formDrafts.delete(form.id);
         } catch {
             toast.error(t('chat.formCard.cancelFailed'), { description: t('chat.formCard.tryAgain') });
         } finally {

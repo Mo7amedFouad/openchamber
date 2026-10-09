@@ -64,7 +64,9 @@ let previousGlobals: Map<string, PropertyDescriptor | undefined>;
 let activeCounts: OperationCounts | null = null;
 let animationFrameQueue: FrameRequestCallback[] = [];
 let tableProbeWidths: Map<string, number> | null = null;
-let notifyResize: ((entries: Array<{ target: Element; contentRect: { width: number; height: number } }>) => void) | null = null;
+type ResizeNotifier = (entries: Array<{ target: Element; contentRect: { width: number; height: number } }>) => void;
+let notifyResize: ResizeNotifier | null = null;
+let notifyTableResize: ResizeNotifier | null = null;
 let MarkdownRenderer: React.ComponentType<{
   content: string;
   messageId: string;
@@ -262,13 +264,22 @@ const initializePerformanceDom = async (): Promise<void> => {
     }
     return svgSetAttribute.call(this, name, value);
   } });
+  // Mermaid viewports and table containers each share one observer; observe
+  // calls and notifyResize follow the Mermaid one.
   class CountingResizeObserver {
-    constructor(callback: (entries: Array<{ target: Element; contentRect: { width: number; height: number } }>) => void) {
+    private readonly callback: ResizeNotifier;
+
+    constructor(callback: ResizeNotifier) {
       if (activeCounts) activeCounts.resizeObserverCreates += 1;
-      notifyResize = callback;
+      this.callback = callback;
     }
 
-    observe(): void {
+    observe(target: Element): void {
+      if (!target.matches('[data-markdown="mermaid-viewport"]')) {
+        notifyTableResize = this.callback;
+        return;
+      }
+      notifyResize = this.callback;
       if (activeCounts) activeCounts.resizeObserverObserveCalls += 1;
     }
 
@@ -281,6 +292,7 @@ const initializePerformanceDom = async (): Promise<void> => {
   const fakeState = {
     openContextPreview: () => undefined,
     codeBlockLineWrap: false,
+    tableCellWrap: false,
     mermaidRenderingMode: 'svg',
   };
   type UIStateSelection = typeof fakeState[keyof typeof fakeState];
@@ -293,8 +305,9 @@ const initializePerformanceDom = async (): Promise<void> => {
   mock.module('@/hooks/useRuntimeAPIs', () => ({ useRuntimeAPIs: () => ({ editor: undefined, runtime: { isVSCode: false } }) }));
   mock.module('@/lib/runtime-fetch', () => ({ runtimeFetch: async () => ({ ok: false }) }));
   mock.module('@/lib/url', () => ({ getUrlScheme: () => null, isAppLinkUrl: () => false, isExternalHttpUrl: () => false, openConfirmedAppLinkUrl: async () => false, openExternalUrl: async () => undefined, getExternalFaviconUrl: () => null, isLoopbackHttpUrl: () => false }));
-  mock.module('@/lib/desktop', () => ({ isDesktopLocalOriginActive: () => false, isDesktopShell: () => false, isVSCodeRuntime: () => false }));
+  mock.module('@/lib/desktop', () => ({ isDesktopLocalOriginActive: () => false, isDesktopShell: () => false, isVSCodeRuntime: () => false, openDesktopPath: async () => false }));
   mock.module('@/lib/runtimeSurface', () => ({ isMobileSurfaceRuntime: () => false }));
+  mock.module('@/lib/router/openSessionFromRoute', () => ({ openSessionLink: async () => undefined }));
   mock.module('@/lib/path-utils', () => ({ getDirectoryForFilePath: () => '', isFilePathWithinDirectory: () => true, toAbsoluteFilePath: () => '', normalizeFilePath: (value: string) => value, isAbsoluteFilePath: (value: string) => value.startsWith('/') }));
   mock.module('@/lib/clipboard', () => ({ copyTextToClipboard: async () => undefined }));
   mock.module('beautiful-mermaid', () => ({
@@ -369,6 +382,36 @@ describe('MarkdownRenderer DOM mount performance contract', () => {
     }
   });
 
+  test('marks only the last block as it grows, settles and shrinks', async () => {
+    const host = document.createElement('div');
+    document.body.replaceChildren(host);
+    const root = createRoot(host);
+    const render = async (content: string, streaming: boolean) => {
+      await act(async () => {
+        root.render(<MarkdownRenderer content={content} messageId="last-block" isAnimated={false} isStreaming={streaming} enableFileReferences={false} />);
+        await waitForSettledEffects();
+      });
+      await act(async () => waitForSettledEffects());
+    };
+    const markedIndexes = () => Array.from(host.querySelectorAll('[data-md-block]'))
+      .map((block, index) => (block.hasAttribute('data-md-last') ? index : -1))
+      .filter((index) => index >= 0);
+    const blockCount = () => host.querySelectorAll('[data-md-block]').length;
+    try {
+      await render('First', true);
+      expect(markedIndexes()).toEqual([blockCount() - 1]);
+      await render('First\n\nSecond\n\nThird', true);
+      expect(blockCount()).toBeGreaterThan(1);
+      expect(markedIndexes()).toEqual([blockCount() - 1]);
+      await render('First\n\nSecond\n\nThird', false);
+      expect(markedIndexes()).toEqual([blockCount() - 1]);
+      await render('Only', false);
+      expect(markedIndexes()).toEqual([blockCount() - 1]);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   test('fixes body-sized table columns once the stream settles', async () => {
     const content = [
       '| An intentionally oversized header | Another oversized header | A third oversized header |',
@@ -403,6 +446,9 @@ describe('MarkdownRenderer DOM mount performance contract', () => {
       await flushAnimationFrame();
       expect(host.querySelector('[data-markdown="table"]')?.getAttribute('data-md-table-layout')).toBe('pending');
       expect(counts.tableProbeReads).toBe(0);
+      const pendingScroll = host.querySelector('[data-markdown="table"]')?.parentElement;
+      expect(pendingScroll).not.toBeNull();
+      Object.defineProperty(pendingScroll, 'clientWidth', { configurable: true, value: 600 });
 
       await act(async () => {
         render(false);
@@ -420,8 +466,8 @@ describe('MarkdownRenderer DOM mount performance contract', () => {
       expect(table).not.toBeNull();
       expect(table?.getAttribute('data-md-table-layout')).toBe('fixed');
       expect(table?.style.tableLayout).toBe('fixed');
-      expect(table?.style.width).toBe('626px');
-      expect(columnWidths).toEqual(['120px', '186px', '320px']);
+      expect(table?.style.width).toBe('906px');
+      expect(columnWidths).toEqual(['120px', '186px', '600px']);
       expect(table?.classList.contains('w-max')).toBe(true);
       expect(table?.classList.contains('min-w-full')).toBe(false);
       expect(table?.classList.contains('w-full')).toBe(false);
@@ -431,12 +477,170 @@ describe('MarkdownRenderer DOM mount performance contract', () => {
       expect(wrapper?.classList.contains('max-w-full')).toBe(true);
       expect(cells.length).toBeGreaterThan(0);
       expect(cells.every((cell) => cell.classList.contains('min-w-[120px]'))).toBe(true);
-      expect(cells.every((cell) => cell.classList.contains('max-w-[320px]'))).toBe(true);
+      expect(cells.every((cell) => !cell.classList.contains('max-w-[320px]'))).toBe(true);
       expect(cells.every((cell) => (
         cell.classList.contains('whitespace-normal')
         && cell.classList.contains('[overflow-wrap:anywhere]')
       ))).toBe(true);
       expect(counts.tableProbeReads).toBe(tableProbeReads);
+
+      // A wider chat lays the table out again; a height-only change does not.
+      const markdown = host.querySelector('[data-markdown-content]');
+      if (!markdown || !notifyTableResize || !pendingScroll) throw new Error('Expected a watched table container');
+      notifyTableResize([{ target: markdown, contentRect: { width: 640, height: 200 } }]);
+      notifyTableResize([{ target: markdown, contentRect: { width: 640, height: 400 } }]);
+      await flushAnimationFrame();
+      expect(counts.tableProbeReads).toBe(tableProbeReads);
+      Object.defineProperty(pendingScroll, 'clientWidth', { configurable: true, value: 1000 });
+      notifyTableResize([{ target: markdown, contentRect: { width: 1040, height: 400 } }]);
+      await flushAnimationFrame();
+      expect(Array.from(table?.querySelectorAll<HTMLTableColElement>('colgroup[data-md-table-columns] col') ?? [])
+        .map((column) => column.style.width)).toEqual(['120px', '186px', '800px']);
+      expect(table?.style.width).toBe('1106px');
+    } finally {
+      tableProbeWidths = null;
+      await act(async () => root.unmount());
+    }
+  });
+
+  test('keeps an inline-code identifier on its natural-width column when the message has room', async () => {
+    const content = [
+      '| Widget | Processing state | Count |',
+      '| --- | --- | ---: |',
+      '| `widget-alpha` | `processing_completed_successfully` | 120 |',
+      '| `widget-beta` | `processing_completed_with_warning` | 45 |',
+    ].join('\n');
+    tableProbeWidths = new Map([
+      ['widget-alphawidget-beta', 150],
+      ['processing_completed_successfullyprocessing_completed_with_warning', 420],
+      ['12045', 80],
+    ]);
+    const host = document.createElement('div');
+    host.style.width = '900px';
+    document.body.replaceChildren(host);
+    const root = createRoot(host);
+    const render = (isStreaming: boolean) => root.render(
+      <MarkdownRenderer content={content} messageId="table-identifier" isAnimated={false} isStreaming={isStreaming} enableFileReferences={false} />,
+    );
+
+    try {
+      await act(async () => {
+        render(true);
+        await waitForSettledEffects();
+      });
+      await flushAnimationFrame();
+      const pendingScroll = host.querySelector('[data-markdown="table"]')?.parentElement;
+      expect(pendingScroll).not.toBeNull();
+      Object.defineProperty(pendingScroll, 'clientWidth', { configurable: true, value: 900 });
+      await act(async () => {
+        render(false);
+        await waitForSettledEffects();
+      });
+      await flushAnimationFrame();
+
+      const table = host.querySelector<HTMLTableElement>('[data-markdown="table"]');
+      const columns = Array.from(table?.querySelectorAll<HTMLTableColElement>('colgroup col') ?? [])
+        .map((column) => column.style.width);
+      expect(table?.querySelector('td code')?.textContent).toBe('widget-alpha');
+      expect(columns).toEqual(['150px', '420px', '120px']);
+      expect(table?.style.width).toBe('690px');
+      expect(table?.querySelector('td')?.classList.contains('max-w-[320px]')).toBe(false);
+      expect(table?.querySelectorAll('td code.whitespace-nowrap')).toHaveLength(4);
+      expect(table?.closest('[data-markdown="table-wrapper"]')?.classList.contains('w-fit')).toBe(true);
+    } finally {
+      tableProbeWidths = null;
+      await act(async () => root.unmount());
+    }
+  });
+
+  test('lets an identifier wider than the message wrap inside its capped column', async () => {
+    const content = [
+      '| Name | Path |',
+      '| --- | --- |',
+      '| `short` | `packages/ui/src/components/chat/markdown/an-identifier-too-wide-for-this-message.ts` |',
+    ].join('\n');
+    tableProbeWidths = new Map([
+      ['short', 80],
+      ['packages/ui/src/components/chat/markdown/an-identifier-too-wide-for-this-message.ts', 1400],
+    ]);
+    const host = document.createElement('div');
+    host.style.width = '700px';
+    document.body.replaceChildren(host);
+    const root = createRoot(host);
+    const render = (isStreaming: boolean) => root.render(
+      <MarkdownRenderer content={content} messageId="table-wide-identifier" isAnimated={false} isStreaming={isStreaming} enableFileReferences={false} />,
+    );
+
+    try {
+      await act(async () => {
+        render(true);
+        await waitForSettledEffects();
+      });
+      await flushAnimationFrame();
+      const pendingScroll = host.querySelector('[data-markdown="table"]')?.parentElement;
+      expect(pendingScroll).not.toBeNull();
+      Object.defineProperty(pendingScroll, 'clientWidth', { configurable: true, value: 700 });
+      await act(async () => {
+        render(false);
+        await waitForSettledEffects();
+      });
+      await flushAnimationFrame();
+
+      const table = host.querySelector<HTMLTableElement>('[data-markdown="table"]');
+      const [fitting, capped] = Array.from(table?.querySelectorAll('td code') ?? []);
+      expect(capped?.textContent).toContain('an-identifier-too-wide');
+      expect(fitting?.classList.contains('whitespace-nowrap')).toBe(true);
+      expect(capped?.classList.contains('whitespace-nowrap')).toBe(false);
+    } finally {
+      tableProbeWidths = null;
+      await act(async () => root.unmount());
+    }
+  });
+
+  test('wraps prose wider than the available message width while keeping table overflow scrollable', async () => {
+    const content = [
+      '| Step | Description |',
+      '| --- | --- |',
+      '| 1 | A sentence long enough to wrap once its column reaches the message width. |',
+    ].join('\n');
+    tableProbeWidths = new Map([
+      ['1', 48],
+      ['A sentence long enough to wrap once its column reaches the message width.', 1400],
+    ]);
+    const host = document.createElement('div');
+    host.style.width = '700px';
+    document.body.replaceChildren(host);
+    const root = createRoot(host);
+    const render = (isStreaming: boolean) => root.render(
+      <MarkdownRenderer content={content} messageId="table-prose" isAnimated={false} isStreaming={isStreaming} enableFileReferences={false} />,
+    );
+
+    try {
+      await act(async () => {
+        render(true);
+        await waitForSettledEffects();
+      });
+      await flushAnimationFrame();
+      const pendingScroll = host.querySelector('[data-markdown="table"]')?.parentElement;
+      expect(pendingScroll).not.toBeNull();
+      Object.defineProperty(pendingScroll, 'clientWidth', { configurable: true, value: 700 });
+      await act(async () => {
+        render(false);
+        await waitForSettledEffects();
+      });
+      await flushAnimationFrame();
+
+      const table = host.querySelector<HTMLTableElement>('[data-markdown="table"]');
+      const columns = Array.from(table?.querySelectorAll<HTMLTableColElement>('colgroup col') ?? [])
+        .map((column) => column.style.width);
+      const prose = table?.querySelector('tbody td:nth-child(2)');
+      // happy-dom cannot lay out text; a 1400px probe capped at 700px with wrapping enabled must wrap in a browser.
+      expect(columns).toEqual(['120px', '700px']);
+      expect(table?.style.width).toBe('820px');
+      expect(table?.parentElement?.classList.contains('overflow-x-auto')).toBe(true);
+      expect(prose?.classList.contains('whitespace-normal')).toBe(true);
+      expect(prose?.classList.contains('[overflow-wrap:anywhere]')).toBe(true);
+      expect(prose?.querySelector('code')).toBeNull();
     } finally {
       tableProbeWidths = null;
       await act(async () => root.unmount());
@@ -645,7 +849,7 @@ describe('MarkdownRenderer DOM mount performance contract', () => {
     expect(metrics.tableProbeReads).toBe(fixtureWorkload.rendererCount * 2);
     expect(metrics.getBoundingClientRectCalls).toBe(metrics.mermaidRenderedCount + metrics.tableProbeReads);
     expect(metrics.viewBoxWrites).toBe(metrics.mermaidRenderedCount);
-    expect(metrics.resizeObserverCreates).toBe(1);
+    expect(metrics.resizeObserverCreates).toBe(2);
     expect(metrics.resizeObserverObserveCalls).toBe(metrics.mermaidRenderedCount);
     expect(metrics.geometrySequence.lastIndexOf('read')).toBeLessThan(metrics.geometrySequence.indexOf('write'));
 
@@ -681,8 +885,8 @@ describe('MarkdownRenderer DOM mount performance contract', () => {
     expect(six.appendCalls).toBeLessThanOrEqual(three.appendCalls * 2 + 12);
     expect(six.getBoundingClientRectCalls).toBe(three.getBoundingClientRectCalls * 2);
     expect(six.viewBoxWrites).toBe(three.viewBoxWrites * 2);
-    expect(three.resizeObserverCreates).toBe(1);
-    expect(six.resizeObserverCreates).toBe(1);
+    expect(three.resizeObserverCreates).toBe(2);
+    expect(six.resizeObserverCreates).toBe(2);
     expect(six.resizeObserverObserveCalls).toBe(three.resizeObserverObserveCalls * 2);
   });
 });

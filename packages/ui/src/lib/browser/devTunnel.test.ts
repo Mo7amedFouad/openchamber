@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 let apiBaseUrl = 'https://remote.example.test';
 
 type TunnelResult = { localPort: number; reused: boolean } | Error;
-type DesktopTunnelArgs = { baseUrl?: string; port?: number; relay?: boolean; targetKey?: string };
-type RelayEvent = { connectionId: string; remotePort: number; message: { type: string; data?: ArrayBuffer } };
+type DesktopTunnelArgs = { baseUrl?: string; port?: number; spaceId?: string | null; relay?: boolean; targetKey?: string };
+type RelayEvent = { connectionId: string; remotePort: number; spaceId: string | null; message: { type: string; data?: ArrayBuffer } };
 type RelaySocketFixture = {
   binaryType: string;
   onopen: (() => void) | null;
@@ -53,8 +53,11 @@ mock.module('@/lib/runtime-switch', () => ({
 
 const {
   DevTunnelUnavailableError,
+  isRemoteWebLoopbackUrl,
   resolveBrowsableUrl,
+  resolveIframeBrowserUrl,
   shouldTunnelLoopbackUrl,
+  isSpaceUnreachableFromHere,
   toDisplayUrl,
 } = await import('./devTunnel');
 
@@ -90,11 +93,20 @@ describe('loopback navigations against a remote instance', () => {
 
   test('a tunnel port is this machine on purpose and is left alone', async () => {
     const tunneled = await resolveBrowsableUrl('http://localhost:3000/');
-    expect(tunneled).toBe('http://127.0.0.1:52418/');
+    expect(tunneled).toBe('http://openchamber-preview.localhost:52418/');
     // Following a link inside the tunnelled page must not tunnel the tunnel.
     expect(shouldTunnelLoopbackUrl(tunneled)).toBe(false);
     // And the address bar still shows what was asked for.
     expect(toDisplayUrl(tunneled)).toBe('http://localhost:3000/');
+  });
+
+  test('preserves paths, queries and fragments while hiding the preview origin', async () => {
+    const original = 'http://localhost:3000/docs/page?q=1#section';
+    const tunneled = await resolveBrowsableUrl(original);
+    expect(tunneled).toBe('http://openchamber-preview.localhost:52418/docs/page?q=1#section');
+    expect(shouldTunnelLoopbackUrl(tunneled)).toBe(false);
+    expect(toDisplayUrl(tunneled)).toBe(original);
+    expect(toDisplayUrl('http://openchamber-preview.localhost.example.com:52418/docs/')).toBe('http://openchamber-preview.localhost.example.com:52418/docs/');
   });
 
   test('a public address is not loopback at all', () => {
@@ -126,12 +138,14 @@ describe('loopback navigations against a remote instance', () => {
     relayActive = true;
     apiBaseUrl = 'openchamber-ui://app';
     const resolved = await resolveBrowsableUrl('http://localhost:4322/docs/');
-    expect(resolved).toBe('http://127.0.0.1:52418/docs/');
+    expect(resolved).toBe('http://openchamber-preview.localhost:52418/docs/');
+    expect(shouldTunnelLoopbackUrl(resolved)).toBe(false);
+    expect(toDisplayUrl(resolved)).toBe('http://localhost:4322/docs/');
     expect(desktopArgs?.relay).toBe(true);
     expect(desktopArgs?.targetKey).toBe('host:exe');
     expect(desktopArgs?.port).toBe(4322);
 
-    relayHandler?.({ connectionId: 'connection-1', remotePort: 4322, message: { type: 'connect' } });
+    relayHandler?.({ connectionId: 'connection-1', remotePort: 4322, spaceId: null, message: { type: 'connect' } });
     await Promise.resolve();
     await Promise.resolve();
     relaySocket.onopen?.();
@@ -146,13 +160,38 @@ describe('loopback navigations against a remote instance', () => {
     let finishAuth = () => {};
     refreshUrlAuth = () => new Promise<string>((resolve) => { finishAuth = () => resolve('url-token'); });
 
-    relayHandler?.({ connectionId: 'connection-cancelled', remotePort: 4322, message: { type: 'connect' } });
-    relayHandler?.({ connectionId: 'connection-cancelled', remotePort: 4322, message: { type: 'close' } });
+    relayHandler?.({ connectionId: 'connection-cancelled', remotePort: 4322, spaceId: null, message: { type: 'connect' } });
+    relayHandler?.({ connectionId: 'connection-cancelled', remotePort: 4322, spaceId: null, message: { type: 'close' } });
     finishAuth();
     await Promise.resolve();
     await Promise.resolve();
 
     expect(openedRelayUrl).toBe('');
+  });
+
+  test('a space\'s loopback is tunnelled on a local instance too, under the space prefix', async () => {
+    apiBaseUrl = 'http://127.0.0.1:3901';
+    const space = '/spaces/84369ed6edda/bait';
+    expect(shouldTunnelLoopbackUrl('http://localhost:4321/', space)).toBe(true);
+    expect(shouldTunnelLoopbackUrl('http://localhost:4321/', '/Users/me/bait')).toBe(false);
+
+    const tunneled = await resolveBrowsableUrl('http://localhost:4321/shop', space);
+    expect(tunneled).toBe('http://openchamber-preview.localhost:52418/shop');
+    expect(desktopArgs?.spaceId).toBe('84369ed6edda');
+    expect(desktopArgs?.port).toBe(4321);
+    expect(shouldTunnelLoopbackUrl(tunneled, space)).toBe(false);
+    expect(toDisplayUrl(tunneled)).toBe('http://localhost:4321/shop');
+    // The host's own port on a local instance is still this machine.
+    expect(await resolveBrowsableUrl('http://localhost:4321/shop', '/Users/me/bait')).toBe('http://localhost:4321/shop');
+  });
+
+  test('a space\'s relay tunnel dials the space prefix', async () => {
+    relayActive = true;
+    apiBaseUrl = 'openchamber-ui://app';
+    relayHandler?.({ connectionId: 'connection-space', remotePort: 4321, spaceId: '84369ed6edda', message: { type: 'connect' } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(openedRelayUrl).toContain('/api/spaces/84369ed6edda/dev-tunnel?port=4321&oc_url_token=test');
   });
 
   test('a local instance resolves its own loopback correctly', () => {
@@ -163,5 +202,45 @@ describe('loopback navigations against a remote instance', () => {
   test('nothing is tunneled outside the desktop shell', () => {
     asDesktop(false);
     expect(shouldTunnelLoopbackUrl('http://localhost:4322/docs/')).toBe(false);
+  });
+
+  test('a same-origin hosted web runtime refuses to load client loopback in an iframe', () => {
+    apiBaseUrl = '';
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { location: { href: 'https://openchamber.example.test/', origin: 'https://openchamber.example.test' } },
+    });
+
+    expect(isRemoteWebLoopbackUrl('http://localhost:4322/docs/')).toBe(true);
+    expect(resolveIframeBrowserUrl('http://localhost:4322/docs/')).toBe('');
+  });
+
+  test('a local hosted web runtime can still open its own loopback pages', () => {
+    apiBaseUrl = '';
+    asDesktop(false);
+
+    expect(isRemoteWebLoopbackUrl('http://localhost:4322/docs/')).toBe(false);
+    expect(resolveIframeBrowserUrl('http://localhost:4322/docs/')).toBe('http://localhost:4322/docs/');
+  });
+
+  test('a space\'s loopback is out of reach from any browser tab, local instance or not', () => {
+    apiBaseUrl = '';
+    asDesktop(false);
+    const space = '/spaces/84369ed6edda/bait';
+    expect(isRemoteWebLoopbackUrl('http://localhost:4321/', space)).toBe(true);
+    expect(resolveIframeBrowserUrl('http://localhost:4321/', space)).toBe('');
+    expect(isSpaceUnreachableFromHere(space)).toBe(true);
+    expect(isSpaceUnreachableFromHere('/Users/me/bait')).toBe(false);
+    // A public page in a space's tab is still just a page.
+    expect(resolveIframeBrowserUrl('https://openchamber.dev/', space)).toBe('https://openchamber.dev/');
+    asDesktop(true);
+    expect(isSpaceUnreachableFromHere(space)).toBe(false);
+  });
+
+  test('public pages are unaffected in a hosted web runtime', () => {
+    asDesktop(false);
+
+    expect(isRemoteWebLoopbackUrl('https://example.test/docs/')).toBe(false);
+    expect(resolveIframeBrowserUrl('https://example.test/docs/')).toBe('https://example.test/docs/');
   });
 });

@@ -2,16 +2,34 @@
  * Provider credential helpers.
  *
  * OpenCode v2 moved provider sign-in behind *integrations*: `GET /api/integration`
- * lists, per integration, the methods it accepts (`oauth`, `key`, `command`,
- * `env`) and the connections that are already live (a stored credential, or an
+ * lists, per integration, the methods it accepts (`oauth`, `key`, `external`,
+ * `command`, `env`) and the connections that are already live (a stored credential, or an
  * environment variable the server can see). There is no `auth.json` any more,
  * so "does this provider have credentials" is answered by its integration's
  * connections rather than by a local file.
  */
 
-import type { ConnectionInfo, IntegrationInfo, IntegrationKeyMethod, IntegrationOAuthMethod } from '@opencode/client';
+import type {
+  ConnectionInfo,
+  IntegrationExternalMethod,
+  IntegrationInfo,
+  IntegrationKeyMethod,
+  IntegrationOAuthMethod,
+} from '@opencode/client';
+import { z } from 'zod';
+import type { Provider } from '@/lib/opencode/model';
 
-export type ProviderIntegration = IntegrationInfo;
+export type CredentialConnection = Extract<ConnectionInfo, { type: 'credential' }>;
+
+/**
+ * An API key written straight into the provider entry. OpenCode 2 keeps request
+ * settings under `settings`, an open record whose typed keys (timeout,
+ * compaction, transport since 2.0.10) never include the key itself, so it is
+ * read as a free-form entry and kept only when it is a string.
+ */
+const providerApiKeySetting = z.string();
+export const readProviderApiKeySetting = (provider: Pick<Provider, 'settings'> | undefined): string | null =>
+  providerApiKeySetting.safeParse(provider?.settings?.apiKey).data ?? null;
 
 /** Integrations are keyed by their own id; a provider matches on the same id. */
 export const findIntegrationForProvider = (
@@ -44,10 +62,17 @@ export const getProviderConnections = (
   return [...(own ?? []), ...(signIn ?? [])];
 };
 
-export const getOAuthMethods = (
+/**
+ * Methods that sign in with a button rather than a pasted key: OAuth, and
+ * external credentials OpenCode references outside its store (2.0.25+: an
+ * Azure CLI login, an AWS profile). Kept in the integration's declared order.
+ */
+export type SignInMethod = IntegrationOAuthMethod | IntegrationExternalMethod;
+
+export const getSignInMethods = (
   integration: IntegrationInfo | undefined,
-): IntegrationOAuthMethod[] =>
-  (integration?.methods ?? []).filter((method): method is IntegrationOAuthMethod => method.type === 'oauth');
+): SignInMethod[] =>
+  (integration?.methods ?? []).filter((method): method is SignInMethod => method.type === 'oauth' || method.type === 'external');
 
 export const getKeyMethod = (
   integration: IntegrationInfo | undefined,
@@ -66,12 +91,12 @@ export const shouldShowApiKeyAuth = (integration: IntegrationInfo | undefined): 
 /** Stored credentials, which are the only connections the user can remove. */
 export const getCredentialConnections = (
   integration: IntegrationInfo | undefined,
-): Extract<ConnectionInfo, { type: 'credential' }>[] =>
+): CredentialConnection[] =>
   (integration?.connections ?? []).filter(
-    (connection): connection is Extract<ConnectionInfo, { type: 'credential' }> => connection.type === 'credential',
+    (connection): connection is CredentialConnection => connection.type === 'credential',
   );
 
-export interface ProviderCredentialInput {
+interface ProviderCredentialInput {
   /**
    * Connections the provider's integration reports. A stored credential or a
    * resolved environment variable both count as a usable login.
@@ -95,6 +120,42 @@ export const providerHasCredentials = (input: ProviderCredentialInput): boolean 
     return true;
   }
   return typeof input.optionsApiKey === 'string' && input.optionsApiKey.trim().length > 0;
+};
+
+/**
+ * A problem OpenCode reported for a live connection (2.0.20+): `needs_auth`
+ * asks the user to sign in again, at `url` when one is given, otherwise by
+ * reconnecting the integration. Runtime-only on OpenCode's side; it clears
+ * itself once the connection works again.
+ */
+export const connectionNeedsAuth = (connection: ConnectionInfo): boolean =>
+  connection.status?.status === 'needs_auth';
+
+export type ProviderCardStatus =
+  | { kind: 'reauthNeeded' }
+  | { kind: 'accounts'; count: number }
+  | { kind: 'connected' }
+  | { kind: 'environment' }
+  | { kind: 'signInNeeded' };
+
+/**
+ * The one-glance status a provider card shows. A provider with no integration
+ * (a custom one from opencode.json) has nothing OpenCode can sign in to, so it
+ * gets no status rather than a false "not signed in".
+ */
+export const getProviderCardStatus = (input: {
+  integrations: readonly IntegrationInfo[] | null;
+  providerId: string;
+  optionsApiKey?: string | null;
+}): ProviderCardStatus | null => {
+  if (input.integrations === null) return null;
+  const connections = getProviderConnections(input.integrations, input.providerId);
+  if ((connections ?? []).some(connectionNeedsAuth)) return { kind: 'reauthNeeded' };
+  const credentialCount = (connections ?? []).filter((connection) => connection.type === 'credential').length;
+  if (credentialCount > 1) return { kind: 'accounts', count: credentialCount };
+  if (credentialCount === 1 || (input.optionsApiKey?.trim().length ?? 0) > 0) return { kind: 'connected' };
+  if ((connections ?? []).some((connection) => connection.type === 'env')) return { kind: 'environment' };
+  return connections === undefined ? null : { kind: 'signInNeeded' };
 };
 
 export const shouldShowModelsSection = (input: {

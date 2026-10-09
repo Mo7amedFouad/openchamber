@@ -180,8 +180,15 @@ export const releaseAutoReviewForward = (key: string): void => {
 
 const autoReviewReviewerInstructions = (): Array<{ text: string; synthetic: true }> => [{
   synthetic: true,
-  text: `This review is part of an automatic review loop. If there are no remaining issues, end your response with this exact final line:\n${AUTO_REVIEW_FINAL_MARKER}\nIf you found issues that require changes, do not include that final status line.`,
+  text: `This review is part of an automatic review loop. When no blocker or non-blocker findings remain open, end your response with this exact final line:\n${AUTO_REVIEW_FINAL_MARKER}\nNits never keep the loop going: list them if useful and still end with that line. While a blocker or non-blocker remains open, leave the line out.`,
 }];
+
+// A review session starts with the same review rules as /workspace-review,
+// so its findings carry severities the loop's stop condition can rely on.
+const reviewSessionInstructions = async (autoReview: boolean | undefined): Promise<Array<{ text: string }>> => {
+  const reviewRules = { text: await renderMagicPrompt('session.review.instructions') };
+  return autoReview ? [reviewRules, ...autoReviewReviewerInstructions()] : [reviewRules];
+};
 
 const runAutoReviewLoop = async (originalSessionID: string): Promise<void> => {
   while (true) {
@@ -386,12 +393,13 @@ const sendPlainMessage = async (
     sessionId: sessionID,
     content: text,
     directory,
+    context: sendContext,
     onMessageID: (messageID) => {
       sentMessageID = messageID;
     },
     beforeOptimisticInsert: () => assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey),
     onOptimisticInsert: () => requestChatForceScrollBottom(sessionID),
-    send: (messageID) => {
+    send: (messageID, context) => {
       assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
       // Only a genuine change travels with the prompt; the review session was
       // created on this selection, so normally nothing is switched.
@@ -403,7 +411,7 @@ const sendPlainMessage = async (
         model: selection.model,
         agent: selection.agent,
         text,
-        context: sendContext,
+        context,
         messageId: messageID,
       }).then(() => undefined);
     },
@@ -445,13 +453,15 @@ const getReviewSessionTitle = (original: Session): string => {
 };
 
 // A review session runs tools too (reads other directories, verifies with commands),
-// so a fresh one starts with the same auto-accept choice as the session it reviews.
-// Failure only leaves the reviewer prompting for permissions the way it did before.
+// so a fresh one starts with the same permission mode as the session it reviews.
+// Failure only leaves the reviewer on the default mode the server gave it.
 const inheritPermissionAutoAccept = async (originalSessionID: string, reviewSessionID: string): Promise<void> => {
   const permissions = usePermissionStore.getState();
-  if (!permissions.isSessionAutoAccepting(originalSessionID)) return;
+  // `ask` is copied too: otherwise the server's default could make the
+  // reviewer more permissive than the session it reviews.
+  const mode = permissions.getSessionMode(originalSessionID);
   try {
-    await permissions.setSessionAutoAccept(reviewSessionID, true);
+    await permissions.setSessionMode(reviewSessionID, mode);
   } catch (error) {
     console.warn('[review-flow] failed to inherit permission auto-accept for review session', error);
   }
@@ -535,7 +545,7 @@ export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void
       const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, reviewSelection, expectedAutoReviewRuntimeKey);
       const runtimeKey = expectedAutoReviewRuntimeKey ?? getRuntimeKey();
       const waitAfterCreatedAt = Date.now();
-      const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, handoffReviewPrompt, reviewSelection, input.autoReview ? autoReviewReviewerInstructions() : undefined, input.autoReview ? runtimeKey : undefined);
+      const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, handoffReviewPrompt, reviewSelection, await reviewSessionInstructions(input.autoReview), input.autoReview ? runtimeKey : undefined);
       if (input.autoReview) {
         startAutoReviewRun({
           originalSessionID: input.originalSessionID,
@@ -571,7 +581,7 @@ export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void
   const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, reviewSelection, expectedAutoReviewRuntimeKey);
   const runtimeKey = expectedAutoReviewRuntimeKey ?? getRuntimeKey();
   const waitAfterCreatedAt = Date.now();
-  const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, reviewPrompt, reviewSelection, input.autoReview ? autoReviewReviewerInstructions() : undefined, input.autoReview ? runtimeKey : undefined);
+  const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, reviewPrompt, reviewSelection, await reviewSessionInstructions(input.autoReview), input.autoReview ? runtimeKey : undefined);
   if (input.autoReview) {
     startAutoReviewRun({
       originalSessionID: input.originalSessionID,

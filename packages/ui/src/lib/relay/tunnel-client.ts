@@ -147,9 +147,12 @@ export type RelayTunnelState = 'idle' | 'connecting' | 'connected' | 'reconnecti
 export interface RelayTunnelStatus {
   state: RelayTunnelState;
   lastError?: string;
+  /** Set on an `error` the tunnel will not retry on a timer (auth failed,
+   * duplicate client, limit exceeded); only an `online`/foreground wake retries. */
+  terminal?: boolean;
 }
 
-export interface RelayTunnelClientOptions {
+interface RelayTunnelClientOptions {
   relayUrl: string;
   serverId: string;
   hostEncPubJwk: JsonWebKey;
@@ -252,7 +255,7 @@ export const createRelayTunnelClient = (options: RelayTunnelClientOptions): Rela
   let wakeListenersInstalled = false;
 
   const setStatus = (next: RelayTunnelStatus): void => {
-    if (status.state === next.state && status.lastError === next.lastError) return;
+    if (status.state === next.state && status.lastError === next.lastError && status.terminal === next.terminal) return;
     status = next;
     for (const listener of statusListeners) {
       try {
@@ -296,10 +299,23 @@ export const createRelayTunnelClient = (options: RelayTunnelClientOptions): Rela
   };
 
   const onWake = (): void => {
-    if (closed || reconnectTimer === null || isOfflineOrHidden()) return;
-    clearReconnectTimer();
-    removeWakeListeners();
-    void connect();
+    if (closed) return;
+    if (reconnectTimer !== null) {
+      if (isOfflineOrHidden()) return;
+      clearReconnectTimer();
+      removeWakeListeners();
+      void connect();
+      return;
+    }
+    // Terminal-dead recovery: no reconnect timer is pending by design, so
+    // without this branch a user foregrounding the app could never revive
+    // the tunnel (the mobile field remedy was a full app restart). Failure
+    // counters stay untouched — establish() resets them on genuine health.
+    if (terminalError !== null && !isOfflineOrHidden()) {
+      removeWakeListeners();
+      terminalError = null;
+      void connect();
+    }
   };
 
   const onVisibilityWake = (): void => {
@@ -445,9 +461,13 @@ export const createRelayTunnelClient = (options: RelayTunnelClientOptions): Rela
       if (closed) return;
       consecutiveFailures += 1;
       // A permanent rejection (auth failed, duplicate, limit) won't resolve by
-      // retrying — surface a terminal error instead of reconnecting forever.
+      // retrying on a timer — but it can resolve transiently (relay-side stale
+      // state, a same-identity probe dial). Park in 'error' with wake
+      // listeners armed: coming back online or to the foreground starts one
+      // fresh attempt instead of looping forever in the background.
       if (terminal) {
-        setStatus({ state: 'error', lastError: error.message });
+        addWakeListeners();
+        setStatus({ state: 'error', lastError: error.message, terminal: true });
         return;
       }
       setStatus({ state: asErrorState ? 'error' : 'reconnecting', lastError: error.message });

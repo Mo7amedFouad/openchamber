@@ -25,6 +25,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createShellEnvironmentLoader } from './shell-environment.mjs';
+import { isSplashColor } from './remote-page-policy.mjs';
 import { clearAppImageArgv0FromProcessEnv } from '@openchamber/web/server/lib/inherited-env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -159,6 +160,12 @@ export const readThemeSource = () => {
   return 'system';
 };
 
+// The UI language, for the few strings main shows before the renderer runs.
+export const readPreferredLocale = () => {
+  const settings = { ...readSettingsRoot(), ...readPreferencesValues() };
+  return typeof settings.locale === 'string' ? settings.locale : 'en';
+};
+
 export const getWindowIconPath = () => {
   if (process.platform !== 'win32' && process.platform !== 'linux') return undefined;
   const iconFileName = process.platform === 'linux' ? 'icon.png' : 'icon.ico';
@@ -223,7 +230,9 @@ const readSplashColor = (settings, key, fallback) => {
     : undefined;
   const legacy = settings[`splash${key.charAt(0).toUpperCase()}${key.slice(1)}`];
   const value = typeof owned === 'string' ? owned : legacy;
-  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  // Checked again on read: a value stored before the IPC check existed is
+  // still interpolated into the trusted splash page.
+  return isSplashColor(value) ? value : fallback;
 };
 
 const buildStartupSplashHtml = () => {
@@ -373,6 +382,7 @@ export const buildRendererAdditionalArguments = ({
   bootOutcome = null,
   relayHostId = '',
   trayEnabled = isMacMenuBarEnabled(),
+  nativeFrame = usesLinuxNativeFrame(),
 } = {}) => [
   `--openchamber-local-origin=${localOrigin}`,
   `--openchamber-api-base-url=${apiBaseUrl}`,
@@ -383,12 +393,22 @@ export const buildRendererAdditionalArguments = ({
   `--openchamber-tray-enabled=${trayEnabled ? '1' : '0'}`,
   `--openchamber-boot-outcome=${JSON.stringify(bootOutcome)}`,
   `--openchamber-relay-host-id=${relayHostId}`,
+  `--openchamber-native-frame=${nativeFrame ? '1' : '0'}`,
 ];
 
-export const usesFramelessChrome = process.platform === 'win32' || process.platform === 'linux';
+// Linux can opt into the desktop environment's own title bar (Settings ->
+// Desktop); it takes effect at the next start, like the window it shapes.
+const usesLinuxNativeFrame = () => (
+  process.platform === 'linux' && readSettingsRoot().desktopLinuxNativeFrame === true
+);
+
+export const usesFramelessChrome = () => (
+  process.platform === 'win32' || (process.platform === 'linux' && !usesLinuxNativeFrame())
+);
 
 export const buildMainWindowOptions = ({ bounds, backgroundColor, additionalArguments }) => {
-  const usesCustomTitleBar = process.platform === 'darwin' || usesFramelessChrome;
+  const frameless = usesFramelessChrome();
+  const usesCustomTitleBar = process.platform === 'darwin' || frameless;
   const options = {
     title: 'OpenChamber',
     width: bounds?.width ?? DEFAULT_WINDOW_WIDTH,
@@ -398,7 +418,7 @@ export const buildMainWindowOptions = ({ bounds, backgroundColor, additionalArgu
     icon: getWindowIconPath(),
     show: false,
     backgroundColor,
-    frame: usesFramelessChrome ? false : undefined,
+    frame: frameless ? false : undefined,
     autoHideMenuBar: process.platform !== 'darwin',
     // Electron's hiddenInset adds its own extra inset, which leaves the controls
     // visibly lower than the app header. Use a plain hidden title bar instead.
@@ -566,6 +586,7 @@ const queryWindowsRegistryValue = (key, name) => {
   const result = spawnSync('reg.exe', ['query', key, '/v', name], {
     encoding: 'utf8',
     windowsHide: true,
+    timeout: 10_000,
   });
   if (result.error || result.status !== 0) return '';
   const line = String(result.stdout || '')

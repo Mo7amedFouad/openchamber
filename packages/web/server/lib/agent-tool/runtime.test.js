@@ -115,15 +115,19 @@ describe('managed agent tool runtime', () => {
     }
     expect(source).not.toContain('"schedule.status"');
     const tool = await loadTools(dataDir, 'schema');
-    expect(tool.openchamber.description).toContain('Session dispatches return immediately by default');
-    expect(tool.openchamber.description).toContain('Set wait only when the user asks or the next step requires the completed result');
+    expect(tool.openchamber.description).toContain('A dispatch returns at once');
+    expect(tool.openchamber.description).toContain('final answer then arrives in this session as a message');
+    // Agents also have OpenCode's own subagent tool; the line between the two is drawn up front.
+    expect(tool.openchamber.description).toContain('use the subagent tool');
     expect(tool.openchamber.input.properties.action.oneOf).toContainEqual({
       const: 'session.messages',
       description: 'Read text-only messages and current sessionStatus for sessionId; directory and limit 10 are defaults',
     });
-    expect(tool.openchamber.input.properties.parameters.properties.wait.description).toBe(
-      'Wait for current session activity to become idle. Omit by default; use only when the user asks or the next step requires the completed result',
-    );
+    // An agent never blocks on a session: no wait or timeout in its schema.
+    const controlParameters = tool.openchamber.input.properties.parameters.properties;
+    expect(controlParameters).not.toHaveProperty('wait');
+    expect(controlParameters).not.toHaveProperty('timeout');
+    expect(controlParameters.returnResult.type).toBe('boolean');
     expect(tool.openchamber.input.properties.parameters.properties.sessionId).toEqual({ type: 'string' });
     expect(source).not.toContain('title: "OpenChamber"');
     // Nothing resolves from the generated directory, so the file must not import.
@@ -264,6 +268,21 @@ describe('managed agent tool runtime', () => {
     expect(Object.keys(await loadTools(plainDir, 'nonotify'))).toEqual(['openchamber']);
   });
 
+  it('registers every tool as a direct tool unless Code Mode is asked for', async () => {
+    const { runtime, dataDir } = await createRuntime();
+    await prepareManagedEnv(runtime, { includeControl: true, includeWeb: true, includeMemory: true, includeNotify: true });
+    const direct = await loadTools(dataDir, 'direct');
+    for (const tool of Object.values(direct)) {
+      expect(tool.options).toEqual({ codemode: false });
+    }
+
+    await prepareManagedEnv(runtime, { includeControl: true, includeWeb: true, includeMemory: true, includeNotify: true, codeMode: true });
+    const behindExecute = await loadTools(dataDir, 'codemode');
+    for (const tool of Object.values(behindExecute)) {
+      expect(tool.options).toEqual({ codemode: true });
+    }
+  });
+
   it('refuses to inject a plugin with no tools in it', async () => {
     const { runtime } = await createRuntime();
     let failed = false;
@@ -294,6 +313,32 @@ describe('managed agent tool runtime', () => {
       'memory.read',
       { action: 'memory.read', title: 'Uses bun' },
       '/work/project',
+      { contextSessionId: 'ses_1' },
+    );
+  });
+
+  it.each([
+    ['session.send', { sessionId: 'ses_2', prompt: 'x', wait: true }, 'returnResult'],
+    ['session.create', { prompt: 'x', timeout: 30 }, 'returnResult'],
+    ['session.fork', { sessionId: 'ses_2', prompt: 'x', lastAssistant: true }, 'returnResult'],
+    ['session.messages', { sessionId: 'ses_2', wait: true }, 'does not wait'],
+  ])('answers an agent asking %s to wait with what replaced it', async (action, input, hint) => {
+    const { runtime, executeAction } = await createRuntime();
+    const result = await runtime.execute({ input: { action, ...input }, sessionID: 'ses_1', tool: 'openchamber' });
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, action, error: expect.objectContaining({ kind: 'usage' }) }));
+    expect(result.error.message).toContain(hint);
+    expect(executeAction).not.toHaveBeenCalled();
+  });
+
+  it('passes returnResult through with the calling session', async () => {
+    const { runtime, executeAction } = await createRuntime();
+    await runtime.execute({ input: { action: 'session.create', prompt: 'x', returnResult: true }, sessionID: 'ses_1', tool: 'openchamber' });
+
+    expect(executeAction).toHaveBeenCalledWith(
+      'session.create',
+      { action: 'session.create', prompt: 'x', returnResult: true },
+      undefined,
       { contextSessionId: 'ses_1' },
     );
   });

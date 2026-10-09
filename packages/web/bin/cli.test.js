@@ -12,7 +12,7 @@ import { requestJson } from './lib/cli-http.js';
 import { requestControlAction } from './lib/cli-control.js';
 import { inspectTunnelAttachability } from './lib/cli-lifecycle.js';
 import { startupCommand } from './lib/commands-startup.js';
-import { formatGoal } from './lib/commands-schedule.js';
+import { formatGoal, scheduleCommand } from './lib/commands-schedule.js';
 import {
   buildSessionCreatePayload,
   buildSessionPromptPayload,
@@ -204,6 +204,27 @@ describe('cli args', () => {
   it('accepts legacy daemon flags as no-ops', () => {
     expect(parseArgs(['serve', '--daemon']).removedFlagErrors).toEqual([]);
     expect(parseArgs(['serve', '-d']).removedFlagErrors).toEqual([]);
+  });
+
+  it('rejects a flag that only another command reads', () => {
+    expect(parseArgs(['serve', '--daily', '09:30']).removedFlagErrors).toEqual([
+      'Unknown option for serve: --daily (used by: schedule)',
+    ]);
+    expect(parseArgs(['--port', '8080', '--lines', '5']).removedFlagErrors).toEqual([
+      'Unknown option for serve: --lines (used by: logs)',
+    ]);
+    expect(parseArgs(['status', '--token', 'x']).removedFlagErrors).toEqual([
+      'Unknown option for status: --token (used by: tunnel)',
+    ]);
+  });
+
+  it('accepts command-owned flags on their own commands and global flags anywhere', () => {
+    expect(parseArgs(['schedule', 'create', '--daily', '09:30', '--prompt', 'hi', '--project', 'p']).removedFlagErrors).toEqual([]);
+    expect(parseArgs(['session', 'send', '--session', 's', '--message', 'hi', '--wait', '--timeout', '30']).removedFlagErrors).toEqual([]);
+    expect(parseArgs(['tunnel', 'start', '--provider', 'cloudflare', '--mode', 'quick', '--dry-run']).removedFlagErrors).toEqual([]);
+    expect(parseArgs(['logs', '--lines', '20', '--no-follow']).removedFlagErrors).toEqual([]);
+    expect(parseArgs(['--port', '8080']).command).toBe('serve');
+    expect(parseArgs(['serve', '--hostname', 'h', '--port', '3000', '--json', '--quiet']).removedFlagErrors).toEqual([]);
   });
 
   it('parses explicit connect-url server overrides', () => {
@@ -827,6 +848,22 @@ describe('CLI HTTP helpers', () => {
         sessionId: 'ses_1',
         directory: '/repo',
       })).resolves.toEqual({ status: 'ok', sessionStatus: { type: 'idle' } });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('reports the enabled state the server saved and fails when it did not change', async () => {
+    const originalFetch = globalThis.fetch;
+    let saved = { task: { id: 'loop:user:mine', name: 'mine', enabled: true }, enabled: true };
+    globalThis.fetch = async () => createMockJsonResponse(saved);
+    const options = { port: 45680, explicitPort: true, directory: '/repo', task: 'loop:user:mine', json: true };
+    try {
+      const output = await captureStdout(() => scheduleCommand(options, 'enable'));
+      expect(JSON.parse(output)).toMatchObject(saved);
+
+      saved = { task: { id: 'loop:user:mine', name: 'mine', enabled: false }, enabled: false };
+      await expect(scheduleCommand(options, 'enable')).rejects.toThrow('mine is still disabled.');
     } finally {
       globalThis.fetch = originalFetch;
     }

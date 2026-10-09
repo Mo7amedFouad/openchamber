@@ -2,6 +2,8 @@ import React from 'react';
 
 import { isCapacitorApp } from '@/lib/platform';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { requestMessageFocus } from '@/lib/router/messageFocus';
+import { openSessionLink } from '@/lib/router/openSessionFromRoute';
 
 import { parseDeepLink, type DeepLinkIntent, type SessionsFilter, type ViewTarget } from './deepLinks';
 
@@ -18,7 +20,7 @@ import { parseDeepLink, type DeepLinkIntent, type SessionsFilter, type ViewTarge
  * appears. Only the most recent intent is kept (newest wins) — a burst of taps shouldn't queue.
  */
 
-export interface DeepLinkHandlers {
+interface DeepLinkHandlers {
   /** Open the sessions sheet, optionally pre-filtered (filter support is best-effort for now). */
   openSessions?: (filter?: SessionsFilter) => void;
   /** Open a non-session surface (files / mcp / instances / update). */
@@ -36,6 +38,12 @@ let pending: DeepLinkIntent | null = null;
 const execute = (intent: DeepLinkIntent): boolean => {
   switch (intent.type) {
     case 'session':
+      // A message link carries no directory; the route opener resolves it.
+      if (intent.messageId && !intent.directory) {
+        void openSessionLink(intent.sessionId, intent.messageId);
+        return true;
+      }
+      if (intent.messageId) requestMessageFocus(intent.sessionId, intent.messageId);
       void useSessionUIStore.getState().setCurrentSession(intent.sessionId, intent.directory ?? null);
       return true;
 

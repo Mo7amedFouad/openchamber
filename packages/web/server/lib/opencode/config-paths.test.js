@@ -61,7 +61,7 @@ describe('OpenCode global config paths', () => {
     const [, agents, commands, skills, snippets, plugins] = await loadOpenCodeModules();
     agents.createAgent('global-agent', { description: 'Global', prompt: 'Global prompt' }, projectDir, 'user');
     commands.createCommand('global-command', { description: 'Global', template: 'Global template' }, projectDir, 'user');
-    skills.createSkill('global-skill', { description: 'Global', instructions: 'Global instructions' }, projectDir, 'user');
+    await skills.createSkill('global-skill', { description: 'Global', instructions: 'Global instructions' }, projectDir, 'user');
     snippets.createSnippet('global-snippet', { content: 'Global snippet' }, projectDir, 'global');
     plugins.createPluginEntry({ spec: 'global-plugin', scope: 'user' }, projectDir);
 
@@ -74,7 +74,7 @@ describe('OpenCode global config paths', () => {
 
     agents.createAgent('project-agent', { description: 'Project', prompt: 'Project prompt' }, projectDir, 'project');
     commands.createCommand('project-command', { description: 'Project', template: 'Project template' }, projectDir, 'project');
-    skills.createSkill('project-skill', { description: 'Project', instructions: 'Project instructions' }, projectDir, 'project');
+    await skills.createSkill('project-skill', { description: 'Project', instructions: 'Project instructions' }, projectDir, 'project');
 
     expect(fs.existsSync(path.join(projectDir, '.opencode', 'agents', 'project-agent.md'))).toBe(true);
     expect(fs.existsSync(path.join(projectDir, '.opencode', 'commands', 'project-command.md'))).toBe(true);
@@ -95,6 +95,7 @@ describe('OpenCode global config paths', () => {
       put(route, ...callbacks) { handlers.set(`PUT ${route}`, callbacks.at(-1)); },
       post() {},
       delete() {},
+      use() {},
     };
     routes.registerOpenCodeRoutes(app, {});
 
@@ -111,6 +112,18 @@ describe('OpenCode global config paths', () => {
     expect(response.json).toHaveBeenLastCalledWith({
       content: 'Global behavior', exists: true, path: path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'AGENTS.md'),
     });
+
+    // A write based on an outdated copy is refused and leaves the file alone.
+    await handlers.get('PUT /api/behavior/agents-md')({
+      body: { content: 'Stale draft', expectedContent: 'Older behavior' },
+    }, response);
+    expect(response.status).toHaveBeenLastCalledWith(409);
+    expect(fs.readFileSync(path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'AGENTS.md'), 'utf8')).toBe('Global behavior');
+
+    await handlers.get('PUT /api/behavior/agents-md')({
+      body: { content: 'Current draft', expectedContent: 'Global behavior' },
+    }, response);
+    expect(fs.readFileSync(path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'AGENTS.md'), 'utf8')).toBe('Current draft');
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

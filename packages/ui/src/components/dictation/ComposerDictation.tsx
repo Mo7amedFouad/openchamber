@@ -39,6 +39,10 @@ interface ComposerDictationProps {
     /** Called once when a dictation leaves idle, before any transcript exists,
         so the host can record which draft the dictation belongs to. */
     onStart?: () => void;
+    /** Called when the record-and-send button is pressed, before the async
+        transcript resolves; the host holds the composer open until onInsert
+        or onInsertAndSend settles. */
+    onSendStart?: () => void;
     /** Reports whether dictation is active (recording/transcribing/failed overlay shown). */
     onActiveChange?: (active: boolean) => void;
     /** Reports the height (px) failed-dictation salvage text needs, so the host
@@ -115,6 +119,7 @@ export const ComposerDictation: React.FC<ComposerDictationProps> = ({
     onInsert,
     onInsertAndSend,
     onStart,
+    onSendStart,
     onActiveChange,
     onContentHeightChange,
     renderTrigger = true,
@@ -178,6 +183,10 @@ export const ComposerDictation: React.FC<ComposerDictationProps> = ({
     React.useEffect(() => {
         onStartRef.current = onStart;
     }, [onStart]);
+    const onSendStartRef = React.useRef(onSendStart);
+    React.useEffect(() => {
+        onSendStartRef.current = onSendStart;
+    }, [onSendStart]);
     const wasIdleRef = React.useRef(true);
     React.useLayoutEffect(() => {
         const idle = status === 'idle';
@@ -343,6 +352,12 @@ export const ComposerDictation: React.FC<ComposerDictationProps> = ({
 
     const confirmWith = (action: 'insert' | 'send') => {
         pendingActionRef.current = action;
+        // Record-and-send keeps the composer open until the submit settles:
+        // the transcript arrives asynchronously and the dictation-end collapse
+        // used to fold the composer into the pill mid-send.
+        if (action === 'send') {
+            onSendStartRef.current?.();
+        }
         void confirmDictation();
     };
 
@@ -407,9 +422,13 @@ export const ComposerDictation: React.FC<ComposerDictationProps> = ({
                         // desktop mounts the overlay inside the glass box and
                         // hides the box's other contents, so the overlay is
                         // transparent; mobile mounts it beside the pill/box,
-                        // hides those, and the overlay is the glass itself.
+                        // hides those, and the overlay carries the glass. The
+                        // glass sits on an inner layer, off this element's
+                        // shadow (see "Floating composer" in
+                        // composer/DOCUMENTATION.md); this element keeps the
+                        // surface's text context.
                         'oc-dictation-overlay absolute inset-0 z-50 flex flex-col overflow-x-hidden overflow-y-hidden',
-                        isMobile && 'oc-glass-composer border border-border/80 shadow-[0_4px_16px_-4px_rgb(0_0_0_/_0.12)]',
+                        isMobile && 'oc-surface-elevated border border-border/80 shadow-[0_4px_16px_-4px_rgb(0_0_0_/_0.12)]',
                         // Mobile: the overlay surface shows instantly (riding the
                         // pill → voice morph), its content fades in only after the
                         // shape has grown — otherwise the controls paint clipped
@@ -420,6 +439,9 @@ export const ComposerDictation: React.FC<ComposerDictationProps> = ({
                     role="dialog"
                     aria-label={t('chat.dictation.overlayAria')}
                 >
+                    {isMobile ? (
+                        <div aria-hidden="true" data-dictation-glass="true" className="oc-glass-composer pointer-events-none absolute inset-0 -z-10" />
+                    ) : null}
                     {topAccessory}
                     <div
                         ref={transcriptAreaRef}
