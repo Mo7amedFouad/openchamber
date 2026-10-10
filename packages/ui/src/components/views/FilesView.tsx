@@ -62,6 +62,7 @@ import { getRuntimeUrlResolver } from '@/lib/runtime-url';
 import { acquireRuntimeUrlAuthToken, refreshRuntimeUrlAuthToken, subscribeRuntimeUrlAuthToken } from '@/lib/runtime-auth';
 import { getRuntimeApiBaseUrl, getRuntimeKey } from '@/lib/runtime-switch';
 import { subscribeToFileContentInvalidation } from '@/lib/fileContentInvalidation';
+import { isFilePathMoveInFlight, rebaseMovedPath, rebaseMovedPathKeys, subscribeToFilePathMoves } from '@/lib/filePathMoves';
 import { DiagramEditor } from '@/components/diagram';
 import { EMPTY_CANVAS_READ, shouldShowFileCanvas, type FileCanvasHandle } from '@/components/views/files/fileCanvas';
 import { GuestFileEditor } from '@/components/views/files/GuestFileEditor';
@@ -81,6 +82,7 @@ import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
 import { useGitStatus, useGitStore } from '@/stores/useGitStore';
 import { DirectoryRequests } from './files/directoryRequests';
 import { useFileTreeUpload } from './files/useFileTreeUpload';
+import { moveWorkspacePath } from './files/moveWorkspacePath';
 import { areDirectoryNodesEqual, buildFileTreeStatusIndex } from './files/fileTreeStatus';
 import { BinaryArtifact } from './files/previews/BinaryArtifact';
 import { FontArtifact } from './files/previews/FontArtifact';
@@ -698,6 +700,13 @@ const Dialogs: React.FC<DialogsProps> = ({
 interface FilesViewProps {
   visible?: boolean;
   mode?: 'full' | 'editor-only';
+  /**
+   * For a host whose tab strip owns the open files (the context panel):
+   * closing a file here, by Cmd/Ctrl+W or after the unsaved-changes prompt,
+   * closes the host's tab, which picks the next file the way its close
+   * button does. Without it the view closes the file in its own state.
+   */
+  onCloseFile?: (path: string) => void;
 }
 
 type FileEditorPosition = {
@@ -710,6 +719,9 @@ type FileEditorPosition = {
 // survives FilesView unmounts without retaining every file visited indefinitely.
 const fileEditorPositions = new Map<string, FileEditorPosition>();
 const MAX_FILE_EDITOR_POSITIONS = 100;
+
+type LineNumbersConfig = React.ComponentProps<typeof CodeMirrorEditor>['lineNumbersConfig'];
+type LineNumberHandlers = NonNullable<NonNullable<LineNumbersConfig>['domEventHandlers']>;
 
 const FilePositionEditor = ({
   positionKey,
@@ -809,7 +821,7 @@ const useAssetAuthRefresh = (
   return { readyKey, nonce };
 };
 
-export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = true }) => {
+export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = true, onCloseFile }) => {
   const { t } = useI18n();
   const { files, runtime, git } = useRuntimeAPIs();
   const { currentTheme, availableThemes, lightThemeId, darkThemeId } = useThemeSystem();
@@ -1029,13 +1041,25 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const [desktopImageSrc, setDesktopImageSrc] = React.useState<string>('');
 
   const [loadedFilePath, setLoadedFilePath] = React.useState<string | null>(null);
+  const loadedFilePathRef = React.useRef(loadedFilePath);
+  loadedFilePathRef.current = loadedFilePath;
+  // Set when a move or rename lands on the loaded file (`lib/filePathMoves.ts`):
+  // once the tabs point at `to`, the editor adopts it with its unsaved edits
+  // instead of re-reading the file.
+  const pendingPathMoveRef = React.useRef<{ from: string; to: string } | null>(null);
+  // Editors are keyed by the path the file was opened under, so adopting a
+  // moved path does not remount them and drop their undo history or edits.
+  const [documentPathAlias, setDocumentPathAlias] = React.useState<{ path: string; documentPath: string } | null>(null);
+  const editorDocumentPath = documentPathAlias && documentPathAlias.path === loadedFilePath
+    ? documentPathAlias.documentPath
+    : loadedFilePath;
   // The path whose last read failed. Requests waiting for that file to load
   // (a line jump, a focus) end here instead of waiting forever.
   const [failedFilePath, setFailedFilePath] = React.useState<string | null>(null);
   // The path the open-file poll saw missing since its last load; only that
   // observation lets the poll reload a failed file once it is back.
   const missingSeenPathRef = React.useRef<string | null>(null);
-  const filePositionKey = JSON.stringify([getRuntimeKey(), root, loadedFilePath]);
+  const filePositionKey = JSON.stringify([getRuntimeKey(), root, editorDocumentPath]);
 
   const [draftContent, setDraftContent] = React.useState('');
   const [isSaving, setIsSaving] = React.useState(false);
@@ -1254,6 +1278,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   } = fileCommentController;
 
   React.useEffect(() => {
+    // A moved file is the same document under a new path: it keeps its draft.
+    if (pendingPathMoveRef.current?.to === selectedFile?.path) return;
     setLineSelection(null);
     reset();
     setDraftContent('');
@@ -1598,33 +1624,29 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       const oldPath = dialogData.path;
       const parentDir = oldPath.split('/').slice(0, -1).join('/');
       const prefix = parentDir ? `${parentDir}/` : '';
-      const newPath = normalizePath(`${prefix}${dialogInputValue.trim()}`);
+      const newName = dialogInputValue.trim();
+      const newPath = normalizePath(`${prefix}${newName}`);
 
-      await files.rename(oldPath, newPath)
-        .then(async (result) => {
-          if (result.success) {
-            toast.success(t('sidebarFilesTree.toast.renamedSuccessfully'));
-            await refreshDirectory(parentDir);
-            if (root) {
-              removeOpenPathsByPrefix(root, oldPath);
-            }
-            if (selectedFile?.path === oldPath || selectedFile?.path.startsWith(`${oldPath}/`)) {
-              if (root) {
-                setSelectedPath(root, null);
-              }
-              setFileContent('');
-              setFileError(null);
-              setDesktopImageSrc('');
-              setLoadedFilePath(null);
-              if (isMobile) {
-                setShowMobilePageContent(false);
-              }
-            }
-          }
+      // Open tabs and the editor, unsaved edits included, follow the new name.
+      try {
+        const result = await moveWorkspacePath(files, root, oldPath, newPath);
+        if (result === 'moved') {
+          toast.success(t('sidebarFilesTree.toast.renamedSuccessfully'));
+          await refreshDirectory(parentDir);
           finishDialogOperation();
-        })
-        .catch(() => failDialogOperation(t('sidebarFilesTree.toast.operationFailed')))
-        .finally(done);
+        } else if (result === 'conflict') {
+          failDialogOperation(t('sidebarFilesTree.toast.nameTaken', {
+            name: newName,
+            folder: getDisplayPath(root, parentDir) || t('sidebarFilesTree.dialog.rootFallback'),
+          }));
+        } else {
+          failDialogOperation(t('sidebarFilesTree.toast.operationFailed'));
+        }
+      } catch {
+        failDialogOperation(t('sidebarFilesTree.toast.operationFailed'));
+      } finally {
+        done();
+      }
       return;
     }
 
@@ -1846,6 +1868,12 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       return true;
     }
 
+    // The file is moving: a write now would recreate it at the old path. Once
+    // the editor adopts the new path, autosave runs again and saves there.
+    if (pendingPathMoveRef.current || isFilePathMoveInFlight(selectedFile.path)) {
+      return false;
+    }
+
     setIsSaving(true);
 
     try {
@@ -2054,6 +2082,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       return activeFileLoadIdRef.current === loadId && currentPath === node.path;
     };
 
+    pendingPathMoveRef.current = null;
+    setDocumentPathAlias(null);
     setFileError(null);
     setFailedFilePath(null);
     missingSeenPathRef.current = null;
@@ -2248,7 +2278,43 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     void ensurePathVisible(selectedFile.path, false);
   }, [ensurePathVisible, selectedFile?.path]);
 
+  React.useEffect(() => subscribeToFilePathMoves(({ runtimeKey, from, to }) => {
+    if (runtimeKey !== getRuntimeKey()) return;
+    // View modes (preview or source, table or text) follow the file.
+    textViewModeByPathRef.current = rebaseMovedPathKeys(textViewModeByPathRef.current, from, to);
+    mdViewModeByPathRef.current = rebaseMovedPathKeys(mdViewModeByPathRef.current, from, to);
+    htmlViewModeByPathRef.current = rebaseMovedPathKeys(htmlViewModeByPathRef.current, from, to);
+    svgViewModeByPathRef.current = rebaseMovedPathKeys(svgViewModeByPathRef.current, from, to);
+    mermaidViewModeByPathRef.current = rebaseMovedPathKeys(mermaidViewModeByPathRef.current, from, to);
+    tableViewModeByPathRef.current = rebaseMovedPathKeys(tableViewModeByPathRef.current, from, to);
+    drawioViewModeByPathRef.current = rebaseMovedPathKeys(drawioViewModeByPathRef.current, from, to);
+    canvasViewModeByPathRef.current = rebaseMovedPathKeys(canvasViewModeByPathRef.current, from, to);
+    const pending = pendingPathMoveRef.current;
+    const heldPath = pending?.to ?? loadedFilePathRef.current;
+    const movedPath = heldPath ? rebaseMovedPath(heldPath, from, to) : null;
+    if (heldPath && movedPath) {
+      pendingPathMoveRef.current = { from: pending?.from ?? heldPath, to: movedPath };
+    }
+  }), []);
+
   React.useEffect(() => {
+    // Adopt a moved file before anything reloads it, visible or not: the
+    // draft stays, only the path the editor saves to changes.
+    const pendingMove = pendingPathMoveRef.current;
+    if (pendingMove && selectedFile?.path === pendingMove.to) {
+      pendingPathMoveRef.current = null;
+      if (loadedFilePath === pendingMove.from) {
+        setDocumentPathAlias({ path: pendingMove.to, documentPath: editorDocumentPath ?? pendingMove.from });
+        setLoadedFilePath(pendingMove.to);
+        return;
+      }
+    } else if (pendingMove && loadedFilePath !== pendingMove.from) {
+      // Another file finished loading while the move landed (the user
+      // switched tabs mid-move): nothing is left to adopt, and a stale hold
+      // would block every save of the file now open.
+      pendingPathMoveRef.current = null;
+    }
+
     if (!visible) return;
     if (!selectedFile) {
       activeFileLoadIdRef.current += 1;
@@ -2269,7 +2335,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
         loadingFilePathRef.current = null;
       }
     });
-  }, [fileContentRevision, loadSelectedFile, loadedFilePath, selectedFile, visible]);
+  }, [editorDocumentPath, fileContentRevision, loadSelectedFile, loadedFilePath, selectedFile, visible]);
 
   // Sync isDirty to a ref so the polling interval can read the latest value
   // without isDirty in its dependency array (avoids interval restart on every edit/save).
@@ -2349,7 +2415,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           }
 
           const sawMissing = missingSeenPathRef.current === selectedPath;
-          const step = openFilePollStep({ stat: 'found', showsFailure, sawMissing, hasUnsavedChanges: hasUnsavedChanges() });
+          const step = openFilePollStep({ stat: 'found', showsFailure, sawMissing, hasUnsavedChanges: hasUnsavedChanges(), moving: false });
           if (step === 'reload') {
             lastLoadedFileStatRef.current = null;
             setLoadedFilePath(null);
@@ -2393,7 +2459,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           // Unsaved edits stay on screen; saving writes the file back.
           const stat = isFileMissingError(error) ? 'missing' : 'failed';
           const sawMissing = missingSeenPathRef.current === selectedPath;
-          if (openFilePollStep({ stat, showsFailure, sawMissing, hasUnsavedChanges: hasUnsavedChanges() }) !== 'show-missing') {
+          const moving = isFilePathMoveInFlight(selectedPath) || pendingPathMoveRef.current !== null;
+          if (openFilePollStep({ stat, showsFailure, sawMissing, hasUnsavedChanges: hasUnsavedChanges(), moving }) !== 'show-missing') {
             return;
           }
           missingSeenPathRef.current = selectedPath;
@@ -2417,6 +2484,39 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     };
   }, [applyLoadedTextContent, contentDetectedBinary, failedFilePath, loadedFilePath, readFile, readFileStat, selectedFile?.path, t, visible]);
 
+  // Closes `path` once nothing stands in the way (no unsaved edits, or the
+  // prompt was answered), moving to `nextFile` when it was the one on screen.
+  const closeOpenFile = React.useCallback((path: string, nextFile: FileNode | null) => {
+    if (onCloseFile) {
+      onCloseFile(path);
+      return;
+    }
+
+    if (root) {
+      removeOpenPath(root, path);
+    }
+
+    if (selectedFile?.path !== path) {
+      return;
+    }
+
+    if (nextFile) {
+      void handleSelectFile(nextFile);
+      return;
+    }
+
+    if (root) {
+      setSelectedPath(root, null);
+    }
+    setFileContent('');
+    setFileError(null);
+    setDesktopImageSrc('');
+    setLoadedFilePath(null);
+    if (isMobile) {
+      setShowMobilePageContent(false);
+    }
+  }, [handleSelectFile, isMobile, onCloseFile, removeOpenPath, root, selectedFile?.path, setSelectedPath]);
+
   const discardAndContinue = React.useCallback(() => {
     const nextFile = pendingSelectFileRef.current;
     const closePath = pendingClosePathRef.current;
@@ -2435,25 +2535,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     setDraftContent(fileContent);
 
     if (closePath) {
-      if (root) {
-        removeOpenPath(root, closePath);
-      }
-      if (selectedFile?.path === closePath) {
-        if (nextFile) {
-          void handleSelectFile(nextFile);
-        } else {
-          if (root) {
-            setSelectedPath(root, null);
-          }
-          setFileContent('');
-          setFileError(null);
-          setDesktopImageSrc('');
-          setLoadedFilePath(null);
-          if (isMobile) {
-            setShowMobilePageContent(false);
-          }
-        }
-      }
+      closeOpenFile(closePath, nextFile);
       return;
     }
 
@@ -2462,7 +2544,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       return;
     }
 
-  }, [fileContent, handleSelectFile, isMobile, removeOpenPath, root, selectedFile?.path, setSelectedPath]);
+  }, [closeOpenFile, fileContent, handleSelectFile]);
 
   const saveAndContinue = React.useCallback(async () => {
     const nextFile = pendingSelectFileRef.current;
@@ -2483,25 +2565,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     setConfirmDiscardOpen(false);
 
     if (closePath) {
-      if (root) {
-        removeOpenPath(root, closePath);
-      }
-      if (selectedFile?.path === closePath) {
-        if (nextFile) {
-          await handleSelectFile(nextFile);
-        } else {
-          if (root) {
-            setSelectedPath(root, null);
-          }
-          setFileContent('');
-          setFileError(null);
-          setDesktopImageSrc('');
-          setLoadedFilePath(null);
-          if (isMobile) {
-            setShowMobilePageContent(false);
-          }
-        }
-      }
+      closeOpenFile(closePath, nextFile);
       return;
     }
 
@@ -2510,7 +2574,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       return;
     }
 
-  }, [handleSelectFile, isMobile, removeOpenPath, root, saveDraft, selectedFile?.path, setSelectedPath]);
+  }, [closeOpenFile, handleSelectFile, saveDraft]);
 
   const handleCloseFile = React.useCallback((path: string) => {
     const isActive = selectedFile?.path === path;
@@ -2523,30 +2587,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       return;
     }
 
-    if (root) {
-      removeOpenPath(root, path);
-    }
-
-    if (!isActive) {
-      return;
-    }
-
-    if (nextFile) {
-      void handleSelectFile(nextFile);
-      return;
-    }
-
-    if (root) {
-      setSelectedPath(root, null);
-    }
-    setFileContent('');
-    setFileError(null);
-    setDesktopImageSrc('');
-    setLoadedFilePath(null);
-    if (isMobile) {
-      setShowMobilePageContent(false);
-    }
-  }, [getNextOpenFile, handleSelectFile, isDirty, isMobile, openFiles, removeOpenPath, root, selectedFile?.path, setSelectedPath]);
+    closeOpenFile(path, nextFile);
+  }, [closeOpenFile, getNextOpenFile, isDirty, openFiles, selectedFile?.path]);
 
   // While a file is open here, Cmd/Ctrl+W closes its tab (asking first when
   // it has unsaved edits) instead of the whole window.
@@ -3001,6 +3043,9 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
 
   const saveDiagramXml = React.useCallback(async (path: string, xml: string) => {
     if (!files.writeFile || xml === diagramSavedXmlRef.current) {
+      return false;
+    }
+    if (pendingPathMoveRef.current || isFilePathMoveInFlight(path)) {
       return false;
     }
 
@@ -3510,6 +3555,95 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       || transaction.isUserEvent('undo') || transaction.isUserEvent('redo') || transaction.isUserEvent('move')
     ));
     if (edited) pinPreviewOnEditRef.current();
+  }), []);
+
+  // Line-number gutter handlers read the latest render's state through a ref,
+  // so the config handed to CodeMirror keeps its identity: a new one would
+  // rebuild the gutter on every FilesView render.
+  const lineNumberHandlers: LineNumberHandlers = {
+    mousedown: (view, line, event) => {
+      if (!(event instanceof MouseEvent)) {
+        return false;
+      }
+      if (event.button !== 0) {
+        return false;
+      }
+      event.preventDefault();
+
+      const lineNumber = view.state.doc.lineAt(line.from).number;
+
+      if (
+        lineSelection &&
+        !event.shiftKey &&
+        Math.min(lineSelection.start, lineSelection.end) === lineNumber &&
+        Math.max(lineSelection.start, lineSelection.end) === lineNumber
+      ) {
+        setLineSelection(null);
+        cancel();
+        isSelectingRef.current = false;
+        selectionStartRef.current = null;
+        setIsDragging(false);
+        return true;
+      }
+
+      // Mobile: tap-to-extend selection
+      if (isMobile && lineSelection && !event.shiftKey) {
+        const start = Math.min(lineSelection.start, lineSelection.end, lineNumber);
+        const end = Math.max(lineSelection.start, lineSelection.end, lineNumber);
+        setLineSelection({ start, end });
+        isSelectingRef.current = false;
+        selectionStartRef.current = null;
+        setIsDragging(false);
+        return true;
+      }
+
+      isSelectingRef.current = true;
+      selectionStartRef.current = lineNumber;
+      setIsDragging(true);
+
+      if (lineSelection && event.shiftKey) {
+        const start = Math.min(lineSelection.start, lineNumber);
+        const end = Math.max(lineSelection.end, lineNumber);
+        setLineSelection({ start, end });
+      } else {
+        setLineSelection({ start: lineNumber, end: lineNumber });
+      }
+
+      return true;
+    },
+    mouseover: (view, line, event) => {
+      if (!(event instanceof MouseEvent)) {
+        return false;
+      }
+      if (event.buttons !== 1) {
+        return false;
+      }
+      if (!isSelectingRef.current || selectionStartRef.current === null) {
+        return false;
+      }
+
+      const lineNumber = view.state.doc.lineAt(line.from).number;
+      const start = Math.min(selectionStartRef.current, lineNumber);
+      const end = Math.max(selectionStartRef.current, lineNumber);
+      setLineSelection({ start, end });
+      setIsDragging(true);
+      return false;
+    },
+    mouseup: () => {
+      isSelectingRef.current = false;
+      selectionStartRef.current = null;
+      setIsDragging(false);
+      return false;
+    },
+  };
+  const lineNumberHandlersRef = React.useRef(lineNumberHandlers);
+  lineNumberHandlersRef.current = lineNumberHandlers;
+  const lineNumbersConfig = React.useMemo<LineNumbersConfig>(() => ({
+    domEventHandlers: {
+      mousedown: (view, line, event) => lineNumberHandlersRef.current.mousedown?.(view, line, event) ?? false,
+      mouseover: (view, line, event) => lineNumberHandlersRef.current.mouseover?.(view, line, event) ?? false,
+      mouseup: (view, line, event) => lineNumberHandlersRef.current.mouseup?.(view, line, event) ?? false,
+    },
   }), []);
 
   const editorExtensions = React.useMemo(() => {
@@ -4465,7 +4599,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
 
   const canvasInFullscreen = mode === 'full' && isFullscreen;
   const canvasKey = selectedFile
-    ? `${selectedFile.path}:${canvasRemountNonce}:${canvasInFullscreen ? 'fullscreen' : 'docked'}`
+    ? `${editorDocumentPath ?? selectedFile.path}:${canvasRemountNonce}:${canvasInFullscreen ? 'fullscreen' : 'docked'}`
     : '';
   const canvasElement = showCanvas && selectedFile && guestFileEditor ? (
     <div ref={canvasWrapperRef} className="h-full overflow-hidden" style={{ minHeight: '400px' }}>
@@ -4724,7 +4858,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           ) : selectedFile && isDrawio && drawioViewMode === 'preview' ? (
             <div className="h-full overflow-hidden" style={{ minHeight: '400px' }}>
               <DiagramEditor
-                key={`${selectedFile.path}:${drawioRemountNonce}`}
+                key={`${editorDocumentPath ?? selectedFile.path}:${drawioRemountNonce}`}
                 ref={diagramEditorRef}
                 xml={diagramEditorXml}
                 onChange={handleDiagramChange}
@@ -4835,6 +4969,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                 <FilePositionEditor
                   key={filePositionKey}
                   positionKey={filePositionKey}
+                  detached={!visible}
                   value={draftContent}
                   onChange={setDraftContent}
                   readOnly={!canEdit}
@@ -4865,84 +5000,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                       end: Math.max(lineSelection.start, lineSelection.end),
                     }
                     : undefined}
-                  lineNumbersConfig={{
-                    domEventHandlers: {
-                      mousedown: (view: EditorView, line: { from: number; to: number }, event: Event) => {
-                        if (!(event instanceof MouseEvent)) {
-                          return false;
-                        }
-                        if (event.button !== 0) {
-                          return false;
-                        }
-                        event.preventDefault();
-
-                        const lineNumber = view.state.doc.lineAt(line.from).number;
-
-                        if (
-                          lineSelection &&
-                          !event.shiftKey &&
-                          Math.min(lineSelection.start, lineSelection.end) === lineNumber &&
-                          Math.max(lineSelection.start, lineSelection.end) === lineNumber
-                        ) {
-                          setLineSelection(null);
-                          cancel();
-                          isSelectingRef.current = false;
-                          selectionStartRef.current = null;
-                          setIsDragging(false);
-                          return true;
-                        }
-
-                        // Mobile: tap-to-extend selection
-                          if (isMobile && lineSelection && !event.shiftKey) {
-                            const start = Math.min(lineSelection.start, lineSelection.end, lineNumber);
-                            const end = Math.max(lineSelection.start, lineSelection.end, lineNumber);
-                            setLineSelection({ start, end });
-                            isSelectingRef.current = false;
-                            selectionStartRef.current = null;
-                            setIsDragging(false);
-                            return true;
-                          }
-
-                          isSelectingRef.current = true;
-                          selectionStartRef.current = lineNumber;
-                          setIsDragging(true);
-
-                          if (lineSelection && event.shiftKey) {
-                          const start = Math.min(lineSelection.start, lineNumber);
-                          const end = Math.max(lineSelection.end, lineNumber);
-                          setLineSelection({ start, end });
-                        } else {
-                          setLineSelection({ start: lineNumber, end: lineNumber });
-                        }
-
-                        return true;
-                      },
-                      mouseover: (view: EditorView, line: { from: number; to: number }, event: Event) => {
-                        if (!(event instanceof MouseEvent)) {
-                          return false;
-                        }
-                        if (event.buttons !== 1) {
-                          return false;
-                        }
-                        if (!isSelectingRef.current || selectionStartRef.current === null) {
-                          return false;
-                        }
-
-                        const lineNumber = view.state.doc.lineAt(line.from).number;
-                          const start = Math.min(selectionStartRef.current, lineNumber);
-                          const end = Math.max(selectionStartRef.current, lineNumber);
-                          setLineSelection({ start, end });
-                          setIsDragging(true);
-                          return false;
-                        },
-                        mouseup: () => {
-                          isSelectingRef.current = false;
-                          selectionStartRef.current = null;
-                          setIsDragging(false);
-                          return false;
-                        },
-                      },
-                  }}
+                  lineNumbersConfig={lineNumbersConfig}
                 />
               </div>
               {shouldMaskEditorForPendingNavigation && (

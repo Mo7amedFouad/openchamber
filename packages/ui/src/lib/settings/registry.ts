@@ -437,6 +437,7 @@ export const SETTINGS_REGISTRY = {
   fileEditorKeymap: field({ scope: 'profile', parse: parseFileEditorKeymap, ui: uiStore('fileEditorKeymap', (v) => useUIStore.getState().setFileEditorKeymap(v)) }),
   fileEditorVimMappings: field({ scope: 'profile', parse: parseTextUpTo(10_000), ui: uiStore('fileEditorVimMappings', (v) => useUIStore.getState().setFileEditorVimMappings(v)) }),
   autoSaveEnabled: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('autoSaveEnabled', (v) => useUIStore.getState().setAutoSaveEnabled(v)) }),
+  confirmFileTreeMove: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('confirmFileTreeMove', (v) => useUIStore.getState().setConfirmFileTreeMove(v)) }),
   autoCreateWorktree: field({ scope: 'profile', parse: parseBoolean }),
   sessionTabsEnabled: field({ scope: 'profile', surfaces: ['web', 'desktop', 'vscode'], parse: parseBoolean, ui: uiStore('sessionTabsEnabled', (v) => useUIStore.getState().setSessionTabsEnabled(v)) }),
   allowPromptingSubagentSessions: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('allowPromptingSubagentSessions', (v) => useUIStore.getState().setAllowPromptingSubagentSessions(v)) }),
@@ -481,8 +482,6 @@ export const SETTINGS_REGISTRY = {
   draftStartersVisible: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('draftStartersVisible', (v) => useUIStore.getState().setDraftStartersVisible(v)) }),
   draftStartersCraftGoalAdded: field({ scope: 'profile', parse: parseBoolean }),
   draftStartersScheduleTaskAdded: field({ scope: 'profile', parse: parseBoolean }),
-  /** "Add project directory" opens by itself only until the user first closes it. */
-  addProjectDialogDismissed: field({ scope: 'profile', parse: parseBoolean }),
 
   // ── Typography (profile; sizes per surface) ──
   fontSize: field({ scope: 'profile', perSurface: true, parse: parseFiniteNumber, ui: uiStore('fontSize', (v) => useUIStore.getState().setFontSize(v)) }),

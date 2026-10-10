@@ -38,6 +38,38 @@ is discarded, so a banner never fuses with the first variable. Failure
 preserves the inherited process environment. Confirmed quit cancels an
 in-flight probe and waits for its process to exit.
 
+Packaged builds turn on Node's on-disk V8 code cache in `entry.mjs`, under
+`<userData>/v8-compile-cache`, so later launches compile `main.mjs` and the
+server's module graph from cached bytecode (`compile-cache.mjs`). The entry's
+own static imports compile before it runs and stay outside the cache.
+Development and AppImage launches skip it (an AppImage mounts at a new path
+every launch, and entries are keyed by path). `NODE_COMPILE_CACHE` is kept out
+of the environment, so OpenCode, terminals and git hooks never write into the
+app profile. Five seconds after startup main flushes the cache and removes the
+subdirectories of other Node versions left by an Electron upgrade. Removal is
+confined to `<userData>/v8-compile-cache`, a root computed from userData and
+never from the directory Node reports; when Node's active directory is not a
+direct child of that root, nothing is removed.
+
+On a plain local launch with packaged UI (no `OPENCHAMBER_SERVER_URL`, no
+remote or SSH default instance, local server not skipped) main navigates the
+splash to the application as soon as the login-shell probe has resolved,
+before the local server is imported, and the renderer parses, fetches and
+compiles the application while the server starts. The runtime values the
+application needs before any request (local origin, API base, client token)
+do not exist yet, so that document ends with a parser-blocking
+`<script src="/__runtime-config.js">` instead of the inline values; main
+answers it once `activateMainWindow` has the resolved runtime
+(`packaged-runtime-config.mjs`). The script carries the client token, and a
+classic `<script src>` ignores CORS, so each pending document gets its own
+single-use nonce in the script URL; a request without an issued, unclaimed
+nonce, or whose fetch metadata is not a same-origin script load, gets 404. A
+sandboxed preview or plugin frame cannot read the document, so it cannot
+learn the nonce. Module scripts run only after parsing ends,
+so no application code runs before the values are set. Remote, SSH,
+environment-target, HMR and background launches keep the previous order:
+resolve, then navigate, with the splash reporting the connection attempt.
+
 `bun run profile:startup` measures a packaged build's launch in an isolated
 profile; see `scripts/perf/DOCUMENTATION.md`.
 
@@ -66,6 +98,11 @@ PDF iframes also start with an opaque origin under the packaged UI protocol. The
 
 The preload bridge exposes desktop-only APIs to the web UI through `window.__OPENCHAMBER_DESKTOP__`. Privileged commands are checked in `main.mjs`, not only in the UI.
 
+Confirmed chat application links use the local-page-gated `desktop_open_external_url`
+command and the OS protocol handler. `external-url-policy.mjs` validates schemes
+again in main, with the same exclusions as the shared UI classifier. Native
+opening failures do not fall back to a browser window for application links.
+
 The compatibility gate can reuse the embedded managed OpenCode CLI preflight
 through `desktop_managed_opencode_compatible`. Main matches the requested
 API origin to the local backend and reads the lifecycle-owned preflight promise.
@@ -81,6 +118,8 @@ IPC results if its endpoint changes while the read is pending.
 | File | Purpose |
 |------|---------|
 | `entry.mjs` | What Electron loads: pre-`ready` configuration, single-instance lock, the first window, then a dynamic import of `main.mjs` |
+| `compile-cache.mjs` | Node's V8 code cache for the packaged main process: enabling it under userData, keeping it out of child environments, flushing and pruning after startup |
+| `packaged-runtime-config.mjs` | Runtime values for packaged application documents: inline injection, and the blocking script and gate used while the first navigation runs ahead of the local server |
 | `early-startup.mjs` | Settings and window-state reading, splash markup, main-window options, the early window handoff and buffered app events; shared by both bundles |
 | `main.mjs` | Electron main process, app lifecycle, windows, menus, deep links, native IPC handlers, updates, local server startup |
 | `electron-host-probe.mjs` | Chromium direct-host probes, identity checks, attempt deadlines, and response cleanup |
@@ -193,6 +232,8 @@ That runs, in order:
 5. `package.mjs` to run `electron-builder`; its `afterPack` hook stages the compiled macOS icon asset catalog.
 
 Build output goes to `packages/electron/dist`.
+
+Electron Builder copies the `@openchamber/web` workspace package whole, ignoring its `files` field, so `build.files` in `package.json` excludes what the packaged runtime never loads: the web package's `dist` (packaged builds serve `Resources/web-dist` through `OPENCHAMBER_DIST_DIR`), its `src`, configs, tests and stray tarballs; TypeScript sources, source maps and Markdown other than licenses from every dependency; `bun-pty`, which only the Bun runtime imports; luxon builds other than `build/node` (CommonJS, for cron-parser) and `build/es6` (ESM, for the server); and `node-pty` prebuilds other than `${platform}-${arch}` (the Electron-rebuilt `build/Release` binary loads first; `${platform}` is the build host, which matches the target because `rebuild:native` already builds for the host OS). Keep these exclusions in the top-level `files`: Electron Builder treats a platform-level `files` list as its own file set, and one holding only exclusions copies the whole package directory into the archive. The `afterPack` hook then reads the `app.asar` header (`scripts/packaged-app-contents.cjs`) and fails the build when anything outside `node_modules` other than the bundled main files, `preload.mjs` and `package.json` is packed, when the web `dist` is packed, or when the bundled main files, the web server entry and manifest, or the unpacked git helpers are missing.
 
 macOS builds produce `dmg` and `zip` artifacts. Windows builds produce an NSIS installer. Linux builds produce an AppImage for the native x64 or arm64 host.
 

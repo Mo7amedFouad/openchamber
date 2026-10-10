@@ -166,10 +166,9 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
   const sessionMessages = useSessionMessages(sessionId ?? '', directory ?? undefined);
   const { context: contextLimit } = useContextWindowLimits(sessionId, directory ?? undefined);
 
-  // Computed from this session's own messages rather than through
-  // `useSessionUIStore.getContextUsage`, which reads the *current* directory's
-  // store and so loses the readout for any session held elsewhere. See
-  // `contextUsage.ts`.
+  // Computed from this session's own messages rather than the header's
+  // reading, which reads the *current* directory's store and so loses the
+  // readout for any session held elsewhere. See `contextUsage.ts`.
   const contextUsage = React.useMemo(
     () => computeContextUsage(sessionMessages, contextLimit),
     [sessionMessages, contextLimit],

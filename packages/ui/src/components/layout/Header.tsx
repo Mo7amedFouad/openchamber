@@ -19,7 +19,8 @@ import { useContextWindowLimits } from '@/hooks/useContextWindowLimits';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSessionWorktreeStore } from '@/sync/session-worktree-store';
 import { formatSessionWorktreeBadge } from '@/sync/session-worktree-contract';
-import { useGlobalSessionStatus, useSessionMessagesResolved } from '@/sync/sync-context';
+import { useGlobalSessionStatus, useSessionMessagesResolved, useSessionMessagesSelector } from '@/sync/sync-context';
+import type { Message } from '@/lib/opencode/model';
 import { useDirectoryStore as useAppDirectoryStore } from '@/stores/useDirectoryStore';
 import { isChatDirectoryForHome } from '@/lib/chatDirectories';
 import { useSessionMessageRecordsForExport } from '@/sync/use-sync';
@@ -46,7 +47,7 @@ import {
 import {
 } from '@/components/ui/collapsible';
 import type { SessionContextUsage } from '@/stores/types/sessionTypes';
-import { isSameContextUsage } from '@/stores/utils/tokenUtils';
+import { buildSessionContextUsage, isSameContextUsage } from '@/stores/utils/tokenUtils';
 import { DesktopHostSwitcherDialog } from '@/components/desktop/DesktopHostSwitcher';
 import { OpenInAppButton } from '@/components/desktop/OpenInAppButton';
 import { ProjectActionsButton } from '@/components/layout/ProjectActionsButton';
@@ -87,6 +88,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from '@/components/ui/button';
 import { useMultiRunTitle } from '@/lib/multirun/useMultiRuns';
 import { buildSessionTreeMoveMessages, requestSessionTreeMove, useIsSessionWorktreeMovePending } from '@/lib/worktrees/sessionWorktreeMove';
+import { titlebarControlsWidthReaderRef } from './titlebarControlsWidth';
 
 const DESKTOP_HEADER_ICON_BUTTON_CLASS = 'app-region-no-drag inline-flex h-8 w-8 items-center justify-center gap-2 rounded-md typography-ui-label font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 hover:bg-interactive-hover transition-colors';
 
@@ -287,7 +289,6 @@ export const Header: React.FC = () => {
   const shortcutOverrides = useUIStore((state) => state.shortcutOverrides);
   const sessionTabsEnabled = useUIStore((state) => state.sessionTabsEnabled);
 
-  const getContextUsage = useSessionUIStore((state) => state.getContextUsage);
   const isNewSessionDraftOpen = useSessionUIStore((state) => Boolean(state.newSessionDraft?.open));
   const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
   const currentSessionMessagesResolved = useSessionMessagesResolved(currentSessionId ?? '');
@@ -387,27 +388,6 @@ export const Header: React.FC = () => {
     setIsDesktopApp(isDesktopShell());
   }, []);
 
-  const { context: contextLimit, output: outputLimit } = useContextWindowLimits(currentSessionId);
-  const contextUsage = getContextUsage(contextLimit, outputLimit);
-  const [stableDesktopContextUsage, setStableDesktopContextUsage] = React.useState<SessionContextUsage | null>(null);
-  const isContextUsageResolvedForSession = !currentSessionId || currentSessionMessagesResolved;
-
-  useEffect(() => {
-    if (!currentSessionId) {
-      setStableDesktopContextUsage((prev) => (prev === null ? prev : null));
-      return;
-    }
-
-    if (contextUsage) {
-      setStableDesktopContextUsage((prev) => (isSameContextUsage(prev, contextUsage) ? prev : contextUsage));
-      return;
-    }
-
-    if (isContextUsageResolvedForSession) {
-      setStableDesktopContextUsage((prev) => (prev === null ? prev : null));
-    }
-  }, [contextUsage, currentSessionId, isContextUsageResolvedForSession]);
-
   const [isDesktopServicesOpen, setIsDesktopServicesOpen] = React.useState(false);
   const [currentInstanceLabel, setCurrentInstanceLabel] = React.useState('Local');
   const [currentInstanceIsLocal, setCurrentInstanceIsLocal] = React.useState(true);
@@ -426,6 +406,40 @@ export const Header: React.FC = () => {
   const workStatusPanelFits = useUIStore((state) => state.workStatusPanelFits);
   const workStatusOverlayOpen = useUIStore((state) => state.workStatusOverlayOpen);
   const setWorkStatusOverlayOpen = useUIStore((state) => state.setWorkStatusOverlayOpen);
+
+  const { context: contextLimit, output: outputLimit } = useContextWindowLimits(currentSessionId);
+  // The readout follows the session's messages through a subscription that
+  // re-renders the header only when the reading changes, and reads nothing
+  // while the readout cannot show (VS Code, work status panel open, draft).
+  const headerContextUsageEnabled = !isVSCode && !workStatusPanelVisible && !isNewSessionDraftOpen;
+  const selectContextUsage = React.useCallback(
+    (messages: Message[]) => buildSessionContextUsage(messages, contextLimit, outputLimit),
+    [contextLimit, outputLimit],
+  );
+  const contextUsage = useSessionMessagesSelector(
+    headerContextUsageEnabled ? currentSessionId ?? '' : '',
+    undefined,
+    selectContextUsage,
+    isSameContextUsage,
+  );
+  const [stableDesktopContextUsage, setStableDesktopContextUsage] = React.useState<SessionContextUsage | null>(null);
+  const isContextUsageResolvedForSession = !currentSessionId || currentSessionMessagesResolved;
+
+  useEffect(() => {
+    if (!currentSessionId) {
+      setStableDesktopContextUsage((prev) => (prev === null ? prev : null));
+      return;
+    }
+
+    if (contextUsage) {
+      setStableDesktopContextUsage((prev) => (isSameContextUsage(prev, contextUsage) ? prev : contextUsage));
+      return;
+    }
+
+    if (isContextUsageResolvedForSession) {
+      setStableDesktopContextUsage((prev) => (prev === null ? prev : null));
+    }
+  }, [contextUsage, currentSessionId, isContextUsageResolvedForSession]);
 
   // Two meanings for one button. With room beside the chat it switches the
   // panel on and off. Without room it cannot be shown inline at all, so it
@@ -1213,16 +1227,22 @@ export const Header: React.FC = () => {
     return style;
   }, [isDesktopApp, isVSCode, titlebarMinHeight, usesFramelessChrome, windowControlsSide]);
 
+  // Written on the root, where every element inherits it: written only when
+  // the height changed, since a new value restyles the whole document.
+  const publishedHeaderHeightRef = React.useRef<number | null>(null);
+  const publishHeaderHeight = React.useCallback((height: number | undefined) => {
+    if (!height || height === publishedHeaderHeightRef.current) {
+      return;
+    }
+    publishedHeaderHeightRef.current = height;
+    document.documentElement.style.setProperty('--oc-header-height', `${height}px`);
+  }, []);
   const updateHeaderHeight = React.useCallback(() => {
     if (typeof document === 'undefined') {
       return;
     }
-
-    const height = headerRef.current?.getBoundingClientRect().height;
-    if (height) {
-      document.documentElement.style.setProperty('--oc-header-height', `${height}px`);
-    }
-  }, []);
+    publishHeaderHeight(headerRef.current?.getBoundingClientRect().height);
+  }, [publishHeaderHeight]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1245,7 +1265,12 @@ export const Header: React.FC = () => {
       });
     };
 
-    const observer = new ResizeObserver(scheduleUpdate);
+    // The header's width follows every sidebar animation frame; its height
+    // comes from the observer entry, so those frames force no layout.
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      publishHeaderHeight(entry?.borderBoxSize?.[0]?.blockSize ?? entry?.target.getBoundingClientRect().height);
+    });
 
     observer.observe(node);
     window.addEventListener('resize', scheduleUpdate);
@@ -1257,7 +1282,7 @@ export const Header: React.FC = () => {
       window.removeEventListener('resize', scheduleUpdate);
       window.removeEventListener('orientationchange', scheduleUpdate);
     };
-  }, [updateHeaderHeight]);
+  }, [publishHeaderHeight, updateHeaderHeight]);
 
   useEffect(() => {
     updateHeaderHeight();
@@ -1441,15 +1466,16 @@ export const Header: React.FC = () => {
           of the overlay buttons — stays a window drag area. */}
       <div
         aria-hidden
-        className="shrink-0 self-stretch transition-[width] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+        className="shrink-0 self-stretch transition-[width] duration-[120ms] ease-out motion-reduce:transition-none"
         style={{ width: headerInsetSpacerWidth }}
       />
       {/* No-drag carve under the persistent TitlebarLeftControls overlay so its
           buttons stay clickable. Width animates with the sidebar so the session
           title slides in lockstep instead of snapping. */}
       <div
+        ref={titlebarControlsWidthReaderRef}
         aria-hidden
-        className="app-region-no-drag shrink-0 self-stretch transition-[width] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+        className="app-region-no-drag shrink-0 self-stretch transition-[width] duration-[120ms] ease-out motion-reduce:transition-none"
         style={{ width: headerControlsSpacerWidth }}
       />
       {/* Sidebar toggle + project actions live in the persistent

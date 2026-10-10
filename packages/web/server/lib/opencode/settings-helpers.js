@@ -397,9 +397,6 @@ export const createSettingsHelpers = (dependencies) => {
     if (typeof candidate.draftStartersScheduleTaskAdded === 'boolean') {
       result.draftStartersScheduleTaskAdded = candidate.draftStartersScheduleTaskAdded;
     }
-    if (candidate.addProjectDialogDismissed === true || candidate.addProjectDialogDismissed === false) {
-      result.addProjectDialogDismissed = candidate.addProjectDialogDismissed;
-    }
 
 
     if (typeof candidate.uiFont === 'string' && candidate.uiFont.length > 0) {
@@ -453,6 +450,9 @@ export const createSettingsHelpers = (dependencies) => {
     }
     if (typeof candidate.autoSaveEnabled === 'boolean') {
       result.autoSaveEnabled = candidate.autoSaveEnabled;
+    }
+    if (candidate.confirmFileTreeMove === true || candidate.confirmFileTreeMove === false) {
+      result.confirmFileTreeMove = candidate.confirmFileTreeMove;
     }
     if (typeof candidate.diffWrapLines === 'boolean') {
       result.diffWrapLines = candidate.diffWrapLines;

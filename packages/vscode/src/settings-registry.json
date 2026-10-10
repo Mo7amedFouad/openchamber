@@ -408,6 +408,9 @@
     "autoSaveEnabled": {
       "scope": "profile"
     },
+    "confirmFileTreeMove": {
+      "scope": "profile"
+    },
     "autoCreateWorktree": {
       "scope": "profile"
     },
@@ -459,9 +462,6 @@
       "scope": "profile"
     },
     "draftStartersScheduleTaskAdded": {
-      "scope": "profile"
-    },
-    "addProjectDialogDismissed": {
       "scope": "profile"
     },
     "fontSize": {

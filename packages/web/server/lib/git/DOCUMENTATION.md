@@ -308,7 +308,7 @@ Web, Electron, hosted mobile, and Capacitor mobile use the connected OpenChamber
 VS Code runs existing-repository network operations as plain Git commands on the extension host with the user's own Git credentials. The webview maps the shared operation lifecycle onto the standard `api:git/push`, `api:git/pull`, `api:git/fetch` and `api:git/remote-branches` bridge messages and keeps operation snapshots in webview memory; nothing is audited or persisted. Managed transport, contributor destination selection, clone, checkout hydration, and auxiliary grant configuration are unsupported there. See `packages/vscode/src/DOCUMENTATION.md`.
 
 ### Log Operations
-- `getLog(directory, options)`: Get commit history with stats (supports maxCount, from, to, file filters).
+- `getLog(directory, options)`: Get commit history with stats (supports maxCount, from, to, file filters). With `from`, it lists `from..to`: only the commits `to` adds, matching the VS Code runtime.
 - `getCommitFiles(directory, commitHash)`: Get file changes for a specific commit relative to its first parent, or the empty tree for a root commit. NUL-delimited paths preserve whitespace; renamed files return their destination in `path` and source in `previousPath`.
 - `getCommitDiff(directory, { hash, path, previousPath, contextLines })`: Get the same commit's patch, with optional file filtering and context depth. `previousPath` keeps a rename's old and new paths in the per-file patch. Reads committed objects only, never the working tree. Exposed as `GET /api/git/commit-diff`; an unavailable hash fails rather than returning an empty diff.
 - `getCommitFileDiff(directory, hash, filePath, isBinary)`: Get before/after content for a specific file in a commit. Returns `{ original, modified, isBinary }`. Runs `git show <hash>^:<path>` and `git show <hash>:<path>` in parallel; returns empty strings on failure (added/deleted/root-commit edge cases).
@@ -408,7 +408,7 @@ The following functions are internal helpers used by exported functions:
 - `tracking`: Upstream branch (e.g., 'origin/main').
 - `ahead`: Number of commits ahead of upstream. Without an upstream, a full read counts the commits missing from the base branch instead (`origin/HEAD`, then `origin/main`, `origin/master`, `main`, `master`).
 - `behind`: Number of commits behind upstream.
-- `aheadBase`: The base ref `ahead` was counted against when there is no upstream; `null` when no such count was made (an upstream exists, light mode, detached HEAD, or no base ref found), so `ahead: 0` alone never means nothing is unpublished.
+- `aheadBase`: The base ref `ahead` was counted against when there is no upstream; commits already on any remote-tracking branch are not counted either, so a contributor's PR checkout, whose head arrives as a fork remote branch, starts at `ahead: 0`. `null` when no such count was made (an upstream exists, light mode, detached HEAD, or no base ref found), so `ahead: 0` alone never means nothing is unpublished.
 - `upstreamComparison`: Optional comparison against `upstream/<current-branch>`, with `{ remote, branch, ahead, behind }`.
 - `files`: Array of file objects with `path`, `index`, `working_dir` status codes.
 - `isClean`: Boolean indicating if working tree is clean.

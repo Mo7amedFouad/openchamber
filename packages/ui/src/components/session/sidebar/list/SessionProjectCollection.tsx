@@ -36,7 +36,7 @@ import { useGlobalSyncStore } from '@/sync/global-sync-store';
 import { createSessionOwnershipIndex } from '../sessions/sessionOwnership';
 import { useProjectSessionLists } from '../projects/useProjectSessionLists';
 import { useSessionSidebarSections } from '../projects/useSessionSidebarSections';
-import { SessionPrefetchEffect } from './useSessionPrefetch';
+import { SessionPrefetchProvider } from './useSessionPrefetch';
 import { normalizePath } from '../utils';
 import type { SessionGroup, SessionNode } from '../types';
 import { SessionProjectScroller } from '../projects/SessionProjectScroller';
@@ -308,6 +308,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     projectRepoStatus: topology.projectRepoStatus,
     projectRootBranches: topology.projectRootBranches,
     gitBranches: topology.gitBranches,
+    sessionOrderRanks: collection.sessionOrderRanks,
     lastRepoStatus: topology.lastRepoStatus,
     buildGroupedSessions,
     hasSessionSearchQuery: view.hasSessionSearchQuery,
@@ -1003,11 +1004,11 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       sessionOwnerBySessionId={ownership.bySessionId}
       handleSessionSelect={selectSessionForProject}
     />
-    <SessionPrefetchEffect
+    <SessionPrefetchProvider
       sortedSessions={collection.orderedSessions}
       recentSessions={recentSessions}
       prefetchSession={prefetchSession}
-    />
+    >
     <SessionRowOrderProvider
       entries={sidebarRowModel.selectionEntries}
       descendantIds={sidebarRowModel.selectionDescendantIds}
@@ -1028,7 +1029,18 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
         <SessionProjectScroller model={scrollerModel} view={scrollerView} actions={scrollerActionSet} />
       </div>
     </SessionRowOrderProvider>
+    </SessionPrefetchProvider>
   </>;
 };
 
-export const SessionProjectCollection: React.FC<SessionProjectCollectionProps> = (props) => props.view.isVisible ? <VisibleSessionProjects {...props} /> : null;
+/**
+ * Built the first time the sidebar is shown and kept while it is closed, so
+ * opening the sidebar again does not rebuild and re-measure the whole list in
+ * the frame the toggle starts. The closed sidebar skips the list's rendering
+ * (see `Sidebar`), and the work it feeds on pauses with `view.isVisible`.
+ */
+export const SessionProjectCollection: React.FC<SessionProjectCollectionProps> = (props) => {
+  const [shown, setShown] = React.useState(props.view.isVisible);
+  if (props.view.isVisible && !shown) setShown(true);
+  return shown ? <VisibleSessionProjects {...props} /> : null;
+};

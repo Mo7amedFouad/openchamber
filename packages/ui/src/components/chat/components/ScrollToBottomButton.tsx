@@ -8,6 +8,7 @@ import { useBackgroundSessionWork } from '@/hooks/useBackgroundSessionWork';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { getProviderModelDisplayName } from '@/lib/modelDisplay';
 import { BackgroundWorkButton } from './BackgroundWorkButton';
+import { registerFloatingPanelClearanceReader } from '@/components/chat/composer/state/composerInsetReaders';
 
 /** The scroll action: the arrow, plus the status label while the session works. */
 const ScrollAction: React.FC<{ onClick: () => void; children?: React.ReactNode }> = ({ onClick, children }) => {
@@ -78,6 +79,7 @@ interface ScrollToBottomButtonProps {
 const ScrollToBottomButton: React.FC<ScrollToBottomButtonProps> = ({ visible, working = false, onClick }) => {
     return (
         <div
+            ref={registerFloatingPanelClearanceReader}
             className={cn(
                 'pointer-events-none absolute bottom-full inset-x-0 mb-2 transition-opacity duration-100',
                 visible ? 'opacity-100' : 'opacity-0',
