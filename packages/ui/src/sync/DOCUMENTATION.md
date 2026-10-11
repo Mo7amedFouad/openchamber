@@ -91,7 +91,7 @@ of button visibility.
 
 Local chat attachments are normalized by `attachment-files.ts` before entering `input-store.ts`. PNG, JPEG, GIF, WebP, and PDF retain their media type; HEIC/HEIF is converted to JPEG; recognized text/code formats and unknown files whose first 4 KB are text are sent as `text/plain`; binary files outside the supported media types are rejected. Jupyter notebooks become readable markdown with non-text outputs omitted. HAR credentials, cookies, and sensitive URL parameters are redacted, while request/response body text is omitted. SVG and Draw.io files are attached as source text, not executable/rendered content. Browser and VS Code pickers expose the same allowlist, while drag-and-drop may still accept an unknown extension after content inspection. Large plain-text clipboard pastes can become in-memory `text/plain` attachments named `pasted-context-N.txt` through the composer paste path; they use the same normalization and send pipeline as manually attached `.txt` files.
 
-Office and OpenDocument packages are metadata-validated before asynchronous extraction, with limits of 20 MB compressed input, 5,000 archive entries, 25 MB per entry, 8 MB per XML part, and 100 MB total uncompressed content. Unsafe or non-canonical archive paths reject the whole attachment, and only XML, relationship, and supported image entries are decompressed and retained. Extracted text, including its explicit truncation notice, is bounded to 500,000 characters so compact but dense Office files cannot consume an entire model context window. XLSX dense rows are serialized as quoted TSV under a single source range instead of repeating every cell address; highly sparse rows retain explicit cell coordinates so distant cells do not generate vast empty TSV spans. Confirmed Office/OpenDocument `@file` mentions are loaded through the runtime filesystem route before submit and use this same extraction pipeline instead of being forwarded as `text/plain` `file://` parts that OpenCode rejects as binary. A failed mention load or extraction leaves the composer intact, and a runtime switch discards preparation from the previous runtime. At most 50 signature-validated PNG, JPEG, GIF, or WebP images and 40 MB of image bytes are retained, with a 20 MB per-image limit; unsupported, invalid, omitted, and truncated content remains explicit in the extracted text. Images whose citations fall beyond text truncation are not attached. Extracted document content remains a `text/plain` file attachment with the original document filename, rather than becoming visible user-message text. Supported embedded images become separate image file parts; the extracted text contains `[filename]` citations at the source paragraph, slide object, spreadsheet cell anchor, or OpenDocument text position. Generated image filenames are re-evaluated if the composer changes during asynchronous preparation, avoiding collisions. The store publishes all generated parts atomically only after every data URL is ready.
+Office and OpenDocument packages are metadata-validated before asynchronous extraction, with limits of 20 MB compressed input, 5,000 archive entries, 25 MB per entry, 8 MB per XML part, and 100 MB total uncompressed content. Unsafe or non-canonical archive paths reject the whole attachment, and only XML, relationship, and supported image entries are decompressed and retained. Extracted text, including its explicit truncation notice, is bounded to 500,000 characters so compact but dense Office files cannot consume an entire model context window. XLSX dense rows are serialized as quoted TSV under a single source range instead of repeating every cell address; highly sparse rows retain explicit cell coordinates so distant cells do not generate vast empty TSV spans. Confirmed Office/OpenDocument `@file` mentions are loaded through the runtime filesystem route before submit and use this same extraction pipeline instead of being forwarded as `text/plain` `file://` parts that OpenCode rejects as binary. Confirmed PNG, JPEG, GIF, WebP, and HEIC/HEIF mentions load through the same route and attach like a picked file, with their real type and a data URL, so the message shows the image and the model receives its bytes (`isReadOnSendMentionFilename`). PDF mentions stay `file://` references: OpenCode reads them itself, and a model without PDF input can still extract the text with tools. A failed mention load or extraction leaves the composer intact, and a runtime switch discards preparation from the previous runtime. At most 50 signature-validated PNG, JPEG, GIF, or WebP images and 40 MB of image bytes are retained, with a 20 MB per-image limit; unsupported, invalid, omitted, and truncated content remains explicit in the extracted text. Images whose citations fall beyond text truncation are not attached. Extracted document content remains a `text/plain` file attachment with the original document filename, rather than becoming visible user-message text. Supported embedded images become separate image file parts; the extracted text contains `[filename]` citations at the source paragraph, slide object, spreadsheet cell anchor, or OpenDocument text position. Generated image filenames are re-evaluated if the composer changes during asynchronous preparation, avoiding collisions. The store publishes all generated parts atomically only after every data URL is ready.
 
 The composer compares normalized attachment MIME types with the selected model's declared input modalities. It warns when a newly attached file or an existing attachment after a model change requires an unsupported modality, but does not block sending. Missing modality metadata remains unknown and does not produce a warning.
 
@@ -326,12 +326,13 @@ Cold navigation and prefetch request 100 records (50 on constrained surfaces) an
 Use `useGlobalSessionsStore` when the UI needs a **shared global session cache**.
 
 Each full app root owns one global polling lifecycle through
-`useGlobalSessionsPolling`. The web/desktop root and VS Code chat root load once
-when mounted and schedule the next refresh 45 seconds after completion, so
-sessions created by another OpenCode process are discovered without relying on
-the sidebar or native tray being visible. Before the first successful global
-load, failures receive at most three earlier retries after 1, 2, and 4 seconds;
-then the normal cadence continues. Store error status, including a chats-root
+`useGlobalSessionsPolling`. The web/desktop root, the desktop Mini Chat window
+root, and the VS Code chat root load once when mounted and schedule the next
+refresh 45 seconds after completion, so sessions created by another OpenCode
+process are discovered without relying on the sidebar or native tray being
+visible. Before the first successful global load, failures receive at most
+three earlier retries after 1, 2, and 4 seconds; then the normal cadence
+continues. Store error status, including a chats-root
 lookup failure, drives recovery because the loader returns retained data on
 failure. Runtime changes retire the old timer and start a fresh load immediately;
 late completions cannot restart the old timer or seed the new runtime.
@@ -931,7 +932,11 @@ request is on the wire while React renders. `ChatContainer` consumes a
 reactions (active row, URL, tabs) and the timeline for the new session renders
 in a transition behind it. Selection *policy* inside `ChatContainer` (auto-
 opening a draft when nothing is selected) reads the live store value, because
-the deferred one still names the previous session for one commit.
+the deferred one still names the previous session for one commit. A selection
+arriving from nothing (a draft just submitted, an empty chat) is not deferred:
+there is no previous conversation to keep, and a deferred `null` beside the
+already-closed draft rendered the empty state for a commit, remounting the
+whole column, composer and work-status card included.
 
 A session whose messages are not in memory at the click keeps the previous
 timeline on screen while they load (up to 400ms), then swaps straight to the
@@ -1090,8 +1095,8 @@ cleanup runs independently of animation frames across all chat runtimes.
 
 ### Pinned chat columns
 
-A chat opened in the side panel ("Open in side panel", a subtask, a review
-session) is a second `ChatContainer` in the same app, pinned to its session
+A chat opened in the side panel ("Open in side panel" or Shift-click on a
+sidebar row, a subtask, a review session) is a second `ChatContainer` in the same app, pinned to its session
 (`pinnedSession`). It used to be an iframe that booted a whole second app per
 tab. The main chat follows the app's selection; a pinned column keeps its own
 and changes only through its own navigation (open a subtask in place, return
@@ -1107,8 +1112,8 @@ chat drives stays the main chat's: the work-status panel and its flags, the
 prompt navigator's keyboard panel, the global timeline dialog, the expanded
 composer preference, and the new-session draft. A pinned column keeps local
 copies where it needs them and leaves the global ones untouched, including on
-mount and unmount. Double Escape stops the session of the column the key was
-pressed in: the column root names its session and whether it runs
+mount and unmount. Double Escape in a column's composer stops that column's
+session: the column root names its session and whether it runs
 (`data-chat-column`, `data-chat-session-id`, `data-chat-working`).
 
 The composer's per-column state (model selection, attachments, pending text

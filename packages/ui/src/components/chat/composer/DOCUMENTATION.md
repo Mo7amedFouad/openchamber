@@ -66,7 +66,10 @@ reply resolves its directory from the store that holds the form.
 session, its subagents' included, in the same frame: one dot per pending
 request with the current one solid, the request's tool in the header, and
 Deny / Always allow / Allow once through the shared response hook, so
-Alt+Enter, Alt+Shift+Enter and Alt+Backspace answer the current request. A
+Alt+Enter, Alt+Shift+Enter and Alt+Backspace answer the current request.
+Always allow and its shortcut exist only when the request carries `save`
+patterns: OpenCode remembers nothing from an "always" without them, so the
+question tool's request offers Deny and Allow once. A
 pending permission hides the form dock and the suggestion.
 The BTW sheet keeps the inline `PermissionCard` for its child session's
 requests; both render the request through `PermissionRequestContent` and
@@ -668,6 +671,20 @@ one app-wide composer state is split per column:
   A pinned composer takes focus on session entry only when the focus is
   already inside its column, so opening a subtask in the panel never pulls
   keystrokes away from the main chat.
+- **Typing with nothing focused.** `editor/inputRedirect.ts` sends input that
+  has no text field to land in to a composer, on desktop only: a printable key
+  without Cmd, Ctrl or Alt is inserted at the end of the draft, a paste is
+  replayed on the editor so attachments and large-text handling still apply,
+  and coming back to the window puts the caret in the composer. The receiving
+  composer is the pinned chat's when the user last clicked or focused into
+  that column and it is still on screen, the main chat's otherwise. Input
+  stays where it is when its target takes text or is a button, link, tab,
+  list or menu item, while a dialog, menu, open select, settings or the BTW
+  composer is on screen, during IME composition, and while text is selected, because typing
+  over a selection starts a comment on it. The window-focus refocus skips a
+  focused field, terminal, editor or embedded page and keeps a selection.
+  `useKeyboardShortcuts` calls it after the shortcut dispatcher, so a
+  bare-key binding or sequence still wins.
 - **Stop prompt.** `armAbortPrompt` arms for a given session. A composer
   clears the prompt of the session it leaves, never another column's.
 
