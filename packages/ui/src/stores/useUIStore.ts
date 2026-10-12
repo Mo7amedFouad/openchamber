@@ -56,7 +56,6 @@ const persistedPanelHeightsSchema = z.object({
 });
 type MermaidRenderingMode = 'svg' | 'ascii';
 type UserMessageRenderingMode = 'markdown' | 'plain';
-type ChatRenderMode = 'sorted' | 'live';
 type ActivityRenderMode = 'collapsed' | 'summary';
 export type SessionRetentionAction = 'archive' | 'delete';
 export type TimeFormatPreference = 'auto' | '12h' | '24h';
@@ -368,7 +367,8 @@ const createContextPanelTab = (descriptor: ContextPanelTabDescriptor): ContextPa
     sessionTitleFallback: normalizeContextTabLabel(descriptor.sessionTitleFallback),
     readOnly: descriptor.readOnly === true,
     stagedDiff: descriptor.stagedDiff === true,
-    diffScope: normalizePendingDiffScope(descriptor.diffScope) ?? (descriptor.stagedDiff === true ? 'staged' : 'working'),
+    // No scope means the view's default, which depends on the branch.
+    diffScope: normalizePendingDiffScope(descriptor.diffScope) ?? (descriptor.stagedDiff === true ? 'staged' : null),
     preview: descriptor.mode === 'file' && descriptor.preview === true,
     ownerSessionId: normalizeBrowserTabOwner(descriptor.mode, descriptor.ownerSessionId),
     touchedAt: Date.now(),
@@ -491,7 +491,7 @@ const sanitizeContextPanelTabs = (tabs: unknown): ContextPanelTab[] => {
       sessionTitleFallback: normalizeContextTabLabel(typeof candidate.sessionTitleFallback === 'string' ? candidate.sessionTitleFallback : null),
       readOnly: candidate.readOnly === true,
       stagedDiff: candidate.stagedDiff === true,
-      diffScope: normalizePendingDiffScope(candidate.diffScope) ?? (candidate.stagedDiff === true ? 'staged' : 'working'),
+      diffScope: normalizePendingDiffScope(candidate.diffScope) ?? (candidate.stagedDiff === true ? 'staged' : null),
       preview: candidate.mode === 'file' && candidate.preview === true,
       ownerSessionId: normalizeBrowserTabOwner(
         candidate.mode,
@@ -987,14 +987,10 @@ interface UIStore {
   streamingAutoFollowEnabled: boolean;
   sessionRecapEnabled: boolean;
   sessionSuggestionEnabled: boolean;
-  /** The "In work" sidebar block and the Track / Done actions. */
+  /** The "In work" sidebar block, the Track / Done actions, and sessions going in on a sent message. */
   sessionWorkEnabled: boolean;
-  /** Let Jev move a session into work when real work starts in it. */
-  sessionWorkAutoOpen: boolean;
   /** Let Jev offer an AI review or a walkthrough after a turn that changed the project. */
   sessionReviewOfferEnabled: boolean;
-  /** Keep a session in work listed under its project group and folders too. */
-  sessionWorkKeepInGroup: boolean;
   sessionGoalEnabled: boolean;
   /** Who checks goal progress; the small model checks when no classification provider can. */
   sessionGoalChecker: SessionGoalChecker;
@@ -1005,7 +1001,6 @@ interface UIStore {
   collapsibleThinkingBlocks: boolean;
   /** A collapsible reasoning block opens while its model thinks. Off: it stays folded to its header. */
   expandReasoningWhileStreaming: boolean;
-  chatRenderMode: ChatRenderMode;
   activityRenderMode: ActivityRenderMode;
   showDeletionDialog: boolean;
   autoDeleteEnabled: boolean;
@@ -1148,8 +1143,6 @@ interface UIStore {
   copyMessagesAsPlainText: boolean;
   showToolFileIcons: boolean;
   showTurnChangedFiles: boolean;
-  showExpandedBashTools: boolean;
-  showExpandedEditTools: boolean;
   timeFormatPreference: TimeFormatPreference;
   weekStartPreference: WeekStartPreference;
   desktopWindowControlsPosition: DesktopWindowControlsPosition;
@@ -1157,7 +1150,6 @@ interface UIStore {
   mermaidRenderingMode: MermaidRenderingMode;
   userMessageRenderingMode: UserMessageRenderingMode;
   collapsibleUserMessages: boolean;
-  stickyUserHeader: boolean;
   promptNavigatorEnabled: boolean;
   showSplitAssistantMessageActions: boolean;
   allowPromptingSubagentSessions: boolean;
@@ -1270,9 +1262,7 @@ interface UIStore {
   setSessionRecapEnabled: (value: boolean) => void;
   setSessionSuggestionEnabled: (value: boolean) => void;
   setSessionWorkEnabled: (value: boolean) => void;
-  setSessionWorkAutoOpen: (value: boolean) => void;
   setSessionReviewOfferEnabled: (value: boolean) => void;
-  setSessionWorkKeepInGroup: (value: boolean) => void;
   setSessionGoalEnabled: (value: boolean) => void;
   setSessionGoalChecker: (value: SessionGoalChecker) => void;
   setSessionGoalMaxAutoTurns: (value: number) => void;
@@ -1280,7 +1270,6 @@ interface UIStore {
   setSessionGoalDefaultBudget: (value: number) => void;
   setCollapsibleThinkingBlocks: (value: boolean) => void;
   setExpandReasoningWhileStreaming: (value: boolean) => void;
-  setChatRenderMode: (value: ChatRenderMode) => void;
   setActivityRenderMode: (value: ActivityRenderMode) => void;
   setShowDeletionDialog: (value: boolean) => void;
   setAutoDeleteEnabled: (value: boolean) => void;
@@ -1391,8 +1380,6 @@ interface UIStore {
   setCopyMessagesAsPlainText: (value: boolean) => void;
   setShowToolFileIcons: (value: boolean) => void;
   setShowTurnChangedFiles: (value: boolean) => void;
-  setShowExpandedBashTools: (value: boolean) => void;
-  setShowExpandedEditTools: (value: boolean) => void;
   setTimeFormatPreference: (value: TimeFormatPreference) => void;
   setWeekStartPreference: (value: WeekStartPreference) => void;
   setDesktopWindowControlsPosition: (value: DesktopWindowControlsPosition) => void;
@@ -1400,7 +1387,6 @@ interface UIStore {
   setMermaidRenderingMode: (value: MermaidRenderingMode) => void;
   setUserMessageRenderingMode: (value: UserMessageRenderingMode) => void;
   setCollapsibleUserMessages: (value: boolean) => void;
-  setStickyUserHeader: (value: boolean) => void;
   setPromptNavigatorEnabled: (value: boolean) => void;
   setShowSplitAssistantMessageActions: (value: boolean) => void;
   setAllowPromptingSubagentSessions: (value: boolean) => void;
@@ -1491,9 +1477,7 @@ export const useUIStore = create<UIStore>()(
         sessionRecapEnabled: true,
         sessionSuggestionEnabled: true,
         sessionWorkEnabled: true,
-        sessionWorkAutoOpen: true,
         sessionReviewOfferEnabled: false,
-        sessionWorkKeepInGroup: false,
         sessionGoalEnabled: true,
         sessionGoalChecker: 'small-model',
         sessionGoalMaxAutoTurns: DEFAULT_SESSION_GOAL_MAX_AUTO_TURNS,
@@ -1501,7 +1485,6 @@ export const useUIStore = create<UIStore>()(
         sessionGoalDefaultBudget: 200_000,
         collapsibleThinkingBlocks: true,
         expandReasoningWhileStreaming: false,
-        chatRenderMode: 'live',
         activityRenderMode: 'summary',
         showDeletionDialog: true,
         autoDeleteEnabled: false,
@@ -1603,8 +1586,6 @@ export const useUIStore = create<UIStore>()(
         copyMessagesAsPlainText: true,
         showToolFileIcons: true,
         showTurnChangedFiles: false,
-        showExpandedBashTools: false,
-        showExpandedEditTools: false,
         timeFormatPreference: 'auto',
         weekStartPreference: 'auto',
         desktopWindowControlsPosition: 'right',
@@ -1612,7 +1593,6 @@ export const useUIStore = create<UIStore>()(
         mermaidRenderingMode: 'svg',
         userMessageRenderingMode: 'markdown',
         collapsibleUserMessages: true,
-        stickyUserHeader: false,
         promptNavigatorEnabled: true,
         showSplitAssistantMessageActions: false,
         allowPromptingSubagentSessions: false,
@@ -2513,16 +2493,8 @@ export const useUIStore = create<UIStore>()(
           set({ sessionWorkEnabled: value });
         },
 
-        setSessionWorkAutoOpen: (value) => {
-          set({ sessionWorkAutoOpen: value });
-        },
-
         setSessionReviewOfferEnabled: (value) => {
           set({ sessionReviewOfferEnabled: value });
-        },
-
-        setSessionWorkKeepInGroup: (value) => {
-          set({ sessionWorkKeepInGroup: value });
         },
 
         setSessionGoalEnabled: (value) => {
@@ -2552,10 +2524,6 @@ export const useUIStore = create<UIStore>()(
 
         setExpandReasoningWhileStreaming: (value) => {
           set({ expandReasoningWhileStreaming: value });
-        },
-
-        setChatRenderMode: (value) => {
-          set({ chatRenderMode: value });
         },
 
         setActivityRenderMode: (value) => {
@@ -3192,12 +3160,6 @@ export const useUIStore = create<UIStore>()(
         setShowTurnChangedFiles: (value) => {
           set({ showTurnChangedFiles: value });
         },
-        setShowExpandedBashTools: (value) => {
-          set({ showExpandedBashTools: value });
-        },
-        setShowExpandedEditTools: (value) => {
-          set({ showExpandedEditTools: value });
-        },
 
         setTimeFormatPreference: (value) => {
           set({ timeFormatPreference: value });
@@ -3220,9 +3182,6 @@ export const useUIStore = create<UIStore>()(
         },
         setCollapsibleUserMessages: (value) => {
           set({ collapsibleUserMessages: value });
-        },
-        setStickyUserHeader: (value) => {
-          set({ stickyUserHeader: value });
         },
         setPromptNavigatorEnabled: (value) => {
           set({ promptNavigatorEnabled: value });
@@ -3574,9 +3533,7 @@ export const useUIStore = create<UIStore>()(
           sessionRecapEnabled: state.sessionRecapEnabled,
           sessionSuggestionEnabled: state.sessionSuggestionEnabled,
           sessionWorkEnabled: state.sessionWorkEnabled,
-          sessionWorkAutoOpen: state.sessionWorkAutoOpen,
           sessionReviewOfferEnabled: state.sessionReviewOfferEnabled,
-          sessionWorkKeepInGroup: state.sessionWorkKeepInGroup,
           sessionGoalEnabled: state.sessionGoalEnabled,
           sessionGoalChecker: state.sessionGoalChecker,
           sessionGoalMaxAutoTurns: state.sessionGoalMaxAutoTurns,
@@ -3584,7 +3541,6 @@ export const useUIStore = create<UIStore>()(
           sessionGoalDefaultBudget: state.sessionGoalDefaultBudget,
           collapsibleThinkingBlocks: state.collapsibleThinkingBlocks,
           expandReasoningWhileStreaming: state.expandReasoningWhileStreaming,
-          chatRenderMode: state.chatRenderMode,
           activityRenderMode: state.activityRenderMode,
           showDeletionDialog: state.showDeletionDialog,
           autoDeleteEnabled: state.autoDeleteEnabled,
@@ -3667,8 +3623,6 @@ export const useUIStore = create<UIStore>()(
           copyMessagesAsPlainText: state.copyMessagesAsPlainText,
           showToolFileIcons: state.showToolFileIcons,
           showTurnChangedFiles: state.showTurnChangedFiles,
-          showExpandedBashTools: state.showExpandedBashTools,
-          showExpandedEditTools: state.showExpandedEditTools,
           timeFormatPreference: state.timeFormatPreference,
           weekStartPreference: state.weekStartPreference,
           desktopWindowControlsPosition: state.desktopWindowControlsPosition,
@@ -3677,7 +3631,6 @@ export const useUIStore = create<UIStore>()(
           mermaidRenderingMode: state.mermaidRenderingMode,
           userMessageRenderingMode: state.userMessageRenderingMode,
           collapsibleUserMessages: state.collapsibleUserMessages,
-          stickyUserHeader: state.stickyUserHeader,
           promptNavigatorEnabled: state.promptNavigatorEnabled,
           showSplitAssistantMessageActions: state.showSplitAssistantMessageActions,
           allowPromptingSubagentSessions: state.allowPromptingSubagentSessions,
