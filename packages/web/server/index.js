@@ -84,6 +84,7 @@ import { createBootstrapRuntime } from './lib/opencode/bootstrap-runtime.js';
 import { createSessionRuntime } from './lib/opencode/session-runtime.js';
 import { configureOpenCodeRuntimeProviders, resetOpenCodeRuntimeProviders } from './lib/small-model/client.js';
 import { configureOpenCodeCredentials, openCodeCredentialSource } from './lib/opencode/auth.js';
+import { configureProjectStartCommandSource, openCodeProjectStartCommandSource } from './lib/opencode/project-start-command.js';
 import { createOpenCodeWatcherRuntime } from './lib/opencode/watcher.js';
 import { createSessionAssistRuntime } from './lib/session-assist/runtime.js';
 import { createSessionGoalRuntime } from './lib/session-goal/runtime.js';
@@ -446,6 +447,7 @@ const settingsRuntime = createSettingsRuntime({
   normalizeManagedRemoteTunnelPresetTokens,
   syncManagedRemoteTunnelConfigWithPresets,
   upsertManagedRemoteTunnelToken,
+  chatRoots: [path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'chats'), OPENCHAMBER_CHATS_DIR],
   onManagedPluginSettingsChanged: () => managedConfigRuntime?.refreshManagedConfigFile(),
   // Declared further down; settings are only saved once the server serves requests.
   onMessageSearchEnabledChanged: (enabled) => messageSearchRuntime.setEnabled(enabled),
@@ -1525,6 +1527,8 @@ configureOpenCodeCredentials(openCodeCredentialSource({
   getLaunchEnvironment: () => openCodeLifecycleRuntime.getManagedOpenCodeProcessEnv(),
   getDefaultDirectory: () => openCodeLifecycleRuntime.getDefaultOpenCodeDirectory(),
 }));
+// A new worktree runs the start command OpenCode keeps on the project record.
+configureProjectStartCommandSource(openCodeProjectStartCommandSource({ buildOpenCodeUrl, getOpenCodeAuthHeaders }));
 
 const getOpenCodeCompatibility = async () => {
   if (isExternalOpenCode || ENV_SKIP_OPENCODE_START) {
@@ -1780,6 +1784,30 @@ const openChamberControlService = createOpenChamberControlService({
   scheduledTaskService,
   browserControl: browserControlRouter,
   fileOpen: fileOpenRequester,
+  projectContextRuntime,
+  // The resolver session knowledge reads pinned notes and plans through, so
+  // what an agent writes is what the next session is given.
+  resolveProjectContextId: resolveMemoryProjectId,
+  // On by default; a plugin generated before it was switched off must not
+  // keep writing.
+  // Like file.open: every connected window hears it, the ones showing that
+  // project open the plan.
+  showPlan: (request) => {
+    let delivered = 0;
+    for (const client of uiOpenChamberEventClients) {
+      try {
+        writeSseEvent(client, { type: 'openchamber:plan-open-request', properties: request });
+        delivered += 1;
+      } catch {
+        uiOpenChamberEventClients.delete(client);
+      }
+    }
+    return delivered;
+  },
+  isKnowledgeToolEnabled: async () => {
+    const settings = await readSettingsFromDiskMigrated().catch(() => null);
+    return settings?.agentKnowledgeToolEnabled !== false;
+  },
   // The tool is off by default; a plugin generated before it was switched off
   // must not keep paging the user.
   notifyUser: async (input) => {

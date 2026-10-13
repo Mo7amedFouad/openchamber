@@ -171,6 +171,9 @@
     "agentMemoryToolEnabled": {
       "scope": "instance"
     },
+    "agentKnowledgeToolEnabled": {
+      "scope": "instance"
+    },
     "isolatedSpacesEnabled": {
       "scope": "instance"
     },
@@ -419,6 +422,20 @@
       "surfaces": [
         "web",
         "desktop"
+      ]
+    },
+    "openLinksInBrowserPanel": {
+      "scope": "profile",
+      "surfaces": [
+        "desktop"
+      ]
+    },
+    "openTrackerLinksOnBoard": {
+      "scope": "profile",
+      "surfaces": [
+        "web",
+        "desktop",
+        "mobile"
       ]
     },
     "autoCreateWorktree": {

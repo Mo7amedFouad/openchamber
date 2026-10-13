@@ -31,6 +31,7 @@ import { useUpdatePolling } from '@/hooks/useUpdatePolling';
 import { useWindowTitle } from '@/hooks/useWindowTitle';
 import { useEnterprisePolicySync } from '@/hooks/useEnterprisePolicySync';
 import { useRoutingSync } from '@/hooks/useRoutingSync';
+import { resolvePlanRequestOwner } from '@/hooks/useProjectContextOwner';
 import { opencodeClient } from '@/lib/opencode/client';
 import type { RuntimeAPIs } from '@/lib/api/types';
 import type { ProjectRef } from '@/lib/projectContextApi';
@@ -226,6 +227,15 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
     useUIStore.getState().openContextFile(directory, event.path);
     openFilesSurface();
   }), [openFilesSurface]);
+
+  // The agent asked for a saved plan to be shown: the plan opens the way a tap
+  // on it in the Project knowledge drawer opens it.
+  React.useEffect(() => subscribeOpenchamberEvents((event) => {
+    if (event.type !== 'plan-open-request') return;
+    const projectRef = resolvePlanRequestOwner(event.directory ?? useDirectoryStore.getState().currentDirectory, event.projectId);
+    if (!projectRef) return;
+    setOpenPlan({ id: event.planId, title: event.title, projectRef });
+  }), []);
 
   const openChangesSurface = React.useCallback((diff: { path: string; staged: boolean } | null = null) => {
     setPendingChangesDiff(diff);
@@ -1041,7 +1051,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
       cancelled = true;
     };
     // Run once on mount — auto-connect is a cold-launch concern only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cold launch with a PERSISTED runtime endpoint (the auto-connect effect
@@ -1100,7 +1110,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
     };
     // Run once on mount — a cold-launch classification only; live drops are
     // handled by the resume/online re-probe paths.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   React.useEffect(() => {
@@ -1449,6 +1459,12 @@ export function MobileApp(props: MobileAppProps) {
     getRuntimeApiBaseUrl,
   );
   // Native connection selection must mount before there is a server to probe.
-  if (isCapacitorMobileApp() && !endpoint) return <MobileAppContent {...props} />;
-  return <OpenCodeCompatibilityGate><MobileAppContent {...props} /></OpenCodeCompatibilityGate>;
+  // The tree keeps one shape across connect/disconnect: a remount on every
+  // connect re-ran the cold-launch re-probe, and its fast-timeout verdict on a
+  // slow server dropped the runtime again, looping connect → drop → connect.
+  return (
+    <OpenCodeCompatibilityGate enabled={!isCapacitorMobileApp() || Boolean(endpoint)}>
+      <MobileAppContent {...props} />
+    </OpenCodeCompatibilityGate>
+  );
 }

@@ -932,6 +932,7 @@ interface UIStore {
   isMobile: boolean;
   isCommandPaletteOpen: boolean;
   isHelpDialogOpen: boolean;
+  isProjectActionsDialogOpen: boolean;
   isAboutDialogOpen: boolean;
   isOpenCodeStatusDialogOpen: boolean;
   openCodeStatusText: string;
@@ -1013,6 +1014,10 @@ interface UIStore {
    * as they open and close. Off, they snap (`useLayoutAnimationMs`).
    */
   layoutAnimations: boolean;
+  /** Plain clicks on links in chat open in the built-in browser panel (desktop only). */
+  openLinksInBrowserPanel: boolean;
+  /** Plain clicks on issue, PR and Linear links in chat open them on the issues and PRs board. */
+  openTrackerLinksOnBoard: boolean;
   autoDeleteAfterDays: number;
   sessionRetentionAction: SessionRetentionAction;
   sessionRetentionOnlyArchived: boolean;
@@ -1105,6 +1110,7 @@ interface UIStore {
   /** Who answers the agent's browser actions: `builtin` (the in-app view) or an extension id. */
   browserProvider: string;
   agentMemoryToolEnabled: boolean;
+  agentKnowledgeToolEnabled: boolean;
   agentNotifyToolEnabled: boolean;
   /** Whether OpenChamber's agent tools sit behind OpenCode's Code Mode instead of being direct tools. */
   agentToolsCodeMode: boolean;
@@ -1228,6 +1234,7 @@ interface UIStore {
   setCommandPaletteOpen: (open: boolean) => void;
   toggleHelpDialog: () => void;
   setHelpDialogOpen: (open: boolean) => void;
+  setProjectActionsDialogOpen: (open: boolean) => void;
   setAboutDialogOpen: (open: boolean) => void;
   setOpenCodeStatusDialogOpen: (open: boolean) => void;
   setOpenCodeStatusText: (text: string) => void;
@@ -1277,6 +1284,8 @@ interface UIStore {
   setAutoSaveEnabled: (value: boolean) => void;
   setConfirmFileTreeMove: (value: boolean) => void;
   setLayoutAnimations: (value: boolean) => void;
+  setOpenLinksInBrowserPanel: (value: boolean) => void;
+  setOpenTrackerLinksOnBoard: (value: boolean) => void;
   setFileTreeSide: (side: 'left' | 'right') => void;
   setAutoDeleteAfterDays: (days: number) => void;
   setSessionRetentionAction: (value: SessionRetentionAction) => void;
@@ -1322,6 +1331,8 @@ interface UIStore {
   toggleFavoriteAgent: (agentName: string) => void;
   addRecentEffort: (providerID: string, modelID: string, variant: string | undefined) => void;
   setDiffLayoutPreference: (mode: 'dynamic' | 'inline' | 'side-by-side') => void;
+  /** The layout setting for every diff, dropping the per-file choices (the Changes header toggle). */
+  setDiffLayoutForAllFiles: (mode: 'inline' | 'side-by-side') => void;
   setDiffFileLayout: (filePath: string, mode: 'inline' | 'side-by-side') => void;
   setDiffWrapLines: (wrap: boolean) => void;
   setDiffHideWhitespace: (hide: boolean) => void;
@@ -1360,6 +1371,7 @@ interface UIStore {
   setMessageSearchReasoningEnabled: (value: boolean) => void;
   setBrowserProvider: (value: string) => void;
   setAgentMemoryToolEnabled: (value: boolean) => void;
+  setAgentKnowledgeToolEnabled: (value: boolean) => void;
   setAgentNotifyToolEnabled: (value: boolean) => void;
   setAgentToolsCodeMode: (value: boolean) => void;
   setAgentWorktreeMoveWithoutAsking: (value: boolean) => void;
@@ -1444,6 +1456,7 @@ export const useUIStore = create<UIStore>()(
         isMobile: false,
         isCommandPaletteOpen: false,
         isHelpDialogOpen: false,
+        isProjectActionsDialogOpen: false,
         isAboutDialogOpen: false,
         isOpenCodeStatusDialogOpen: false,
         openCodeStatusText: '',
@@ -1491,6 +1504,8 @@ export const useUIStore = create<UIStore>()(
         autoSaveEnabled: true,
         confirmFileTreeMove: true,
         layoutAnimations: true,
+        openLinksInBrowserPanel: false,
+        openTrackerLinksOnBoard: true,
         autoDeleteAfterDays: 30,
         sessionRetentionAction: 'archive',
         sessionRetentionOnlyArchived: false,
@@ -1566,6 +1581,7 @@ export const useUIStore = create<UIStore>()(
         messageSearchReasoningEnabled: false,
         browserProvider: 'builtin',
         agentMemoryToolEnabled: false,
+        agentKnowledgeToolEnabled: true,
         agentNotifyToolEnabled: false,
         agentToolsCodeMode: false,
         agentWorktreeMoveWithoutAsking: false,
@@ -2335,6 +2351,10 @@ export const useUIStore = create<UIStore>()(
           set({ isHelpDialogOpen: open });
         },
 
+        setProjectActionsDialogOpen: (open) => {
+          set({ isProjectActionsDialogOpen: open });
+        },
+
         setAboutDialogOpen: (open) => {
           set({ isAboutDialogOpen: open });
         },
@@ -2554,6 +2574,14 @@ export const useUIStore = create<UIStore>()(
           set({ layoutAnimations: value });
         },
 
+        setOpenLinksInBrowserPanel: (value) => {
+          set({ openLinksInBrowserPanel: value });
+        },
+
+        setOpenTrackerLinksOnBoard: (value) => {
+          set({ openTrackerLinksOnBoard: value });
+        },
+
         setFileTreeSide: (side) => {
           set({ fileTreeSide: side === 'left' ? 'left' : 'right' });
         },
@@ -2703,6 +2731,10 @@ export const useUIStore = create<UIStore>()(
 
         setDiffLayoutPreference: (mode) => {
           set({ diffLayoutPreference: mode });
+        },
+
+        setDiffLayoutForAllFiles: (mode) => {
+          set({ diffLayoutPreference: mode, diffFileLayout: {} });
         },
 
         setDiffFileLayout: (filePath, mode) => {
@@ -3093,6 +3125,9 @@ export const useUIStore = create<UIStore>()(
         },
         setAgentMemoryToolEnabled: (value) => {
           set({ agentMemoryToolEnabled: value });
+        },
+        setAgentKnowledgeToolEnabled: (value) => {
+          set({ agentKnowledgeToolEnabled: value });
         },
         setIsolatedSpacesEnabled: (value) => {
           set({ isolatedSpacesEnabled: value });
@@ -3547,6 +3582,8 @@ export const useUIStore = create<UIStore>()(
           autoSaveEnabled: state.autoSaveEnabled,
           confirmFileTreeMove: state.confirmFileTreeMove,
           layoutAnimations: state.layoutAnimations,
+          openLinksInBrowserPanel: state.openLinksInBrowserPanel,
+          openTrackerLinksOnBoard: state.openTrackerLinksOnBoard,
           autoDeleteAfterDays: state.autoDeleteAfterDays,
           sessionRetentionAction: state.sessionRetentionAction,
           sessionRetentionOnlyArchived: state.sessionRetentionOnlyArchived,
@@ -3606,6 +3643,7 @@ export const useUIStore = create<UIStore>()(
           messageSearchReasoningEnabled: state.messageSearchReasoningEnabled,
           browserProvider: state.browserProvider,
           agentMemoryToolEnabled: state.agentMemoryToolEnabled,
+          agentKnowledgeToolEnabled: state.agentKnowledgeToolEnabled,
           agentNotifyToolEnabled: state.agentNotifyToolEnabled,
           agentToolsCodeMode: state.agentToolsCodeMode,
           agentWorktreeMoveWithoutAsking: state.agentWorktreeMoveWithoutAsking,
