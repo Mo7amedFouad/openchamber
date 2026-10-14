@@ -86,7 +86,12 @@ their shared managed root for folders and never expose worktree actions. Project
 display can be all projects or one selected project. The mobile sessions sheet
 (`apps/MobileSessionsSheet.tsx`) partitions the same way through
 `partitionSidebarSessions` and lists Chats as a collapsible section above the
-project tree. Rows that span projects are labelled "project · branch" through
+project tree. Its header has no title: close, Add project, the display menu
+(a dropdown with the view, the project sort, the section toggles and Reorder
+projects, which swaps the menu's button for Done while it runs) and New chat;
+Chats has no "+" of its own, as New chat starts the same chat. Its footer
+keeps Issues and PRs and Settings as buttons and puts Scheduled tasks,
+Archive and Usage in a "More" menu. Rows that span projects are labelled "project · branch" through
 `resolveSidebarSessionLocations` (live root branch included; the branch map is
 held while the drawer closes). A session of an isolated space has the space's
 name where the branch goes and `inSpace` set on its location, so the timeline
@@ -97,8 +102,8 @@ manual project order with reordering, one header per project over its root
 sessions from every worktree and space, 7 at a time with Show more / Show
 fewer (collapsing a project resets it), two-line rows with a fixed-height
 second line, and the project's icon on that line in In work. The
-phone's Tree view follows the desktop tree: In work uses those
-two-line rows, Chats one-line rows without a gutter, and project sessions are
+phone's Tree view follows the desktop tree: Pinned and In work use one-line
+rows unless Detailed rows is on, Chats one-line rows without a gutter, and project sessions are
 tree rows (12px per level, subsession chevron on the left with a
 thumb-sized target, live state on the right) under worktree headers drawn as
 folder rows (chevron, 12px icon, medium-weight label), each opening with a
@@ -107,8 +112,9 @@ separates projects, as zones and projects are sections of equal weight. Its tree
 (`MOBILE_TREE_BASE_PADDING_PX`), so root session titles start where the
 project label does next to the project icon's 32px slot (no tile: a bare
 20px glyph, or a 24px image with rounded corners; zone icons likewise); the phone has no session
-folders. Its display panel offers the In work toggle (`showWorkSection`);
-sessions in work stay under their project in both views. VS Code excludes
+folders. Its display menu offers the Pinned and In work toggles and, in Tree,
+Detailed rows; pinned sessions and sessions in work stay under their project
+in both views. VS Code excludes
 worktrees and managed
 Chats, while retaining its workspace-scoped grouped list and inline archived
 buckets.
@@ -204,9 +210,15 @@ default) shows it. With the zone hidden its sessions stay in their projects.
 `workItems` and `workSessionIds` to the row model. A session in work also stays
 in its project group and folders, in both views, so it appears in two places.
 Search lists it once, in the work block. Chats are never in work
-and offer no Track action. An empty zone is not rendered. Rows use
-`renderContext: 'timeline-mixed'` in both views: two lines, the project's icon
-before the branch, never expanded, with subsessions feeding the badges. Search
+and offer no Track action. An empty zone is not rendered. In List, rows use
+`renderContext: 'timeline-mixed'`: two lines, the project's icon before the
+branch. In Tree they use `'mixed-compact'` by default: one line like a Chats
+row, the PR or issue as a coloured mark without its number (its tooltip lists
+the links), the branch, project and model in the whole-row tooltip. The display
+menu's Detailed rows toggle (`detailedZoneRows`, `sidebarDetailedZoneRows`, per
+surface, off by default, offered in Tree only) gives Tree the two-line rows.
+Both never expand, with subsessions feeding the badges; a run row there opens
+its overview. Search
 keeps a root whose subsession matches (`sessionTreeMatchesSidebarQuery`): those
 subsessions are nowhere else in the sidebar. The zone counts only sessions that match
 themselves (`countSessionTreeQueryMatches`), and a group subtracts the trees
@@ -242,6 +254,23 @@ its subsessions' requests. Row memoization
 compares `metadata` by reference and `time.idle`, so metadata-only changes
 (work, goal, recap) re-render the row.
 
+## Pinned
+
+The display menu's Show pinned section toggle (`showPinnedSection`,
+`sidebarShowPinnedSection`, per surface, off by default) adds a `pinned`
+activity zone between Chats and In work, in both views. It lists pinned
+top-level, unarchived project sessions in the shared lifecycle order; pinned
+chats stay pinned at the top of Chats. A pinned session in work is listed in
+Pinned only. Like In work, its sessions also stay in their projects, search
+lists each of them once, in the zone (`zoneSessionIds` carries both zones' ids),
+and the rows follow the same render context. Pins are the device-local
+`useSessionPinnedStore`, so the zone differs between devices. The phone sheet
+mirrors both toggles: its display menu offers Show pinned section and, in
+Tree, Detailed rows, and its Pinned and In work sections render
+`MobileTimelineRows` with `compact` in Tree unless detailed rows are on. VS Code
+shows no section toggles, so it has no Pinned zone and its In work rows stay on
+one line.
+
 ## Timeline view
 
 `sidebarViewMode` (profile-scoped, per surface) switches the desktop and web
@@ -250,7 +279,8 @@ pair as the changes file tree). VS Code has no switch and always renders
 `projects`. The display menu opens with Select sessions, then the view, then
 the project sort, worktree sort and project display as submenus that name the
 current choice (Tree only; VS Code keeps the project sort), then the section
-toggles, then Collapse all / Expand all.
+toggles (Chats, Pinned, In work) and, in Tree, Detailed rows, then Collapse
+all / Expand all.
 
 - Chats rows render with `renderContext: 'timeline-chat'` in both views: one
   line, no left gutter, pin marker and status icon on the right beside the
@@ -262,15 +292,16 @@ toggles, then Collapse all / Expand all.
   its limit, so a project or worktree list never opens with more than 7.
   Collapsing a zone header resets its Show more state.
 - Zone collapse state lives in `useSessionProjectViewState` next to project
-  collapse and lasts for the mount only. The display menu's Collapse all /
+  collapse and is saved in local storage (`oc.sessions.activityCollapse`), so
+  it survives a restart like project and group collapse. The display menu's Collapse all /
   Expand all set every project and the zones (`SIDEBAR_ACTIVITY_KEYS`: Chats,
-  In work) together, in both views. Session folders keep their own
+  Pinned, In work) together, in both views. Session folders keep their own
   collapse state.
 - Zone and project headers are sticky in both views; there is no user toggle.
   Both views draw the same zone headers, with the leading icon that turns
   into the collapse chevron on hover and the Chats new-chat button; project
   headers are shared too, with the same hover actions and menu.
-- Below Chats and In work it renders one project
+- Below Chats, Pinned and In work it renders one project
   header per project followed by that project's non-archived root sessions
   from every worktree and space, in the shared lifecycle order with pinned
   sessions first. Projects keep the manual order whatever the stored project
@@ -279,8 +310,14 @@ toggles, then Collapse all / Expand all.
   (`timelineProjectContainerKey`); collapsing it, from its header or Collapse
   all, forgets that state, so expanding starts from 7 again. A project without
   sessions shows its load status, or nothing under its header.
+- An isolated space without chats has no session row, so its group header,
+  the same row the Tree draws with its state line and menu, sits first under
+  the project until its first chat; it hides nothing and is not dragged. Search
+  leaves it out. While the space's chats load it waits, and a failed load shows
+  the Tree's failure line under it. The phone's timeline shows the space's bucket header the same
+  way, through the header the phone tree uses.
 - Timeline rows carry `renderContext: 'timeline'` (under a project) or
-  `'timeline-mixed'` (In work), depth 0 and empty children. They
+  `'timeline-mixed'` (Pinned and In work), depth 0 and empty children. They
   never expand, show no chevron, no folders and no worktree groups. Folders are
   not projected, so the row menu hides `Move to folder`. Their archive/delete
   actions still cover the full subtree, because `collectSessionSubtreeIds`
@@ -388,7 +425,8 @@ matching and ordering. Search does not fetch sessions or broaden list membership
   An empty worktree group or folder (no sessions, no folders, nothing loading)
   shows no chevron, does not toggle, lists nothing under its header, and is
   always open: a collapse saved while it had sessions is dropped, so its first
-  new session shows at once. The phone treats empty worktrees the same way. Collapsing a project or a worktree group, from its
+  new session shows at once. A group counts as empty only once its sessions
+  have loaded; before that it only looks empty, and the saved collapse stays. The phone treats empty worktrees the same way. Collapsing a project or a worktree group, from its
   header or Collapse all, forgets its Show more state. The project
   header stays the sticky zone band above its tree. Root sessions and the
   root's folders sit at level 0; worktree, space and archive headers sit at

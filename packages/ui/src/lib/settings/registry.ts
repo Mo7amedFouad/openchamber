@@ -9,7 +9,7 @@
  * (`settings-registry.json`, see `registry-snapshot.ts`) — the server's and the
  * VS Code bridge's key lists. A key that is not here does not persist.
  *
- * Scopes (see `.opencode/plans/settings-scopes.md`):
+ * Scopes (see `DOCUMENTATION.md` in this folder):
  * - `instance`: a fact about the machine the server runs on. Never synced.
  * - `profile`: the person's preference. Synced to every client of the
  *   instance; a few are stored per surface kind (`perSurface`).
@@ -365,6 +365,8 @@ export const SETTINGS_REGISTRY = {
   sidebarWorktreeSortOrder: field({ scope: 'profile', parse: parseOneOf(['recent', 'manual', 'a-z']), ui: sessionDisplayField('worktreeSortOrder') }),
   sidebarShowChatsSection: field({ scope: 'profile', perSurface: true, parse: parseBoolean, ui: sessionDisplayField('showChatsSection') }),
   sidebarShowWorkSection: field({ scope: 'profile', perSurface: true, parse: parseBoolean, ui: sessionDisplayField('showWorkSection') }),
+  sidebarShowPinnedSection: field({ scope: 'profile', perSurface: true, parse: parseBoolean, ui: sessionDisplayField('showPinnedSection') }),
+  sidebarDetailedZoneRows: field({ scope: 'profile', perSurface: true, parse: parseBoolean, ui: sessionDisplayField('detailedZoneRows') }),
 
   // ── Work status ──
   workStatusSectionOrder: field({
@@ -636,7 +638,6 @@ export const LOCAL_DEVICE_KEYS = [
   'contextEditorTreeVisible',
   'contextEditorVisible',
   'contextEditorTreeWidth',
-  'notesPanelHeight',
   'workStatusExpandedSections',
   'messageQueueExpanded',
   'workStatusScrollTop',
@@ -656,7 +657,6 @@ export const LOCAL_DEVICE_KEYS = [
   'dockBadgeEnabled',
   'alwaysShowScrollbars',
   'agentMemoryViewedAt',
-  'projectContextSidebarWidth',
 ] as const;
 
 /**
