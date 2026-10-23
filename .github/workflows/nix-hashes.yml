@@ -22,6 +22,9 @@ concurrency:
 
 jobs:
   rehash:
+    # Opening the bake PR needs the OC_REVIEW_APP secrets, which only exist
+    # in openchamber/openchamber; forks skip instead of failing on re-bakes.
+    if: github.repository == 'openchamber/openchamber'
     runs-on: ubuntu-latest
     steps:
       # No persisted GITHUB_TOKEN: the only push here goes through the app
