@@ -19,6 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
 import { ContextMenu } from '@base-ui/react/context-menu';
+import { ContextMenu as ContextMenuRoot } from '@/components/ui/context-menu';
 import type { Session } from '@/lib/opencode/model';
 
 import {
@@ -36,7 +37,7 @@ import { useSessionTabsStore } from '@/stores/useSessionTabsStore';
 import { closeSessionTabAndActivateNeighbour } from '@/lib/sessionTabs';
 import { useGlobalSessionsStore, resolveGlobalSessionDirectory } from '@/stores/useGlobalSessionsStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useSessionUnseenCount } from '@/sync/notification-store';
+import { useSessionUnread } from '@/sync/session-unread';
 import { useIsSessionAiRenamePending } from '@/sync/use-session-ai-rename';
 import { useMultiRunMemberIds } from '@/lib/multirun/useMultiRuns';
 import { SessionProjectIcon } from './SessionProjectIcon';
@@ -134,8 +135,8 @@ const SessionTabItem: React.FC<{
   const isAiRenaming = useIsSessionAiRenamePending(tab.id, resolveGlobalSessionDirectory(tab.session));
   const turnActivity = useSessionTurnActivity(tab.id);
   const isStreaming = turnActivity !== null;
-  const unseenCount = useSessionUnseenCount(tab.id);
-  const showUnread = unseenCount > 0 && !isActive && !isStreaming;
+  const isUnread = useSessionUnread(tab.id);
+  const showUnread = isUnread && !isActive && !isStreaming;
   const showDot = isStreaming || showUnread;
 
   const menuArgsFor = (components: SessionTabMenuComponents): SessionTabMenuArgs => ({
@@ -157,7 +158,7 @@ const SessionTabItem: React.FC<{
       {...attributes}
       {...listeners}
     >
-      <ContextMenu.Root
+      <ContextMenuRoot
         open={contextMenuOpen}
         onOpenChange={setContextMenuOpen}
         onOpenChangeComplete={(open) => onMenuOpenChangeComplete?.(open)}
@@ -221,7 +222,7 @@ const SessionTabItem: React.FC<{
                           its content. */}
                       {isActive ? children : (
                         <div className="flex min-w-0 flex-col justify-center">
-                          <span dir="auto" className="block max-w-full overflow-hidden whitespace-nowrap oc-ui-start-align text-[13px] font-medium leading-4">{title}</span>
+                          <span dir="auto" className="block max-w-full overflow-hidden whitespace-nowrap oc-ui-start-align text-[0.8125rem] font-medium leading-4">{title}</span>
                         </div>
                       )}
                     </div>
@@ -293,7 +294,7 @@ const SessionTabItem: React.FC<{
             </ContextMenu.Popup>
           </ContextMenu.Positioner>
         </ContextMenu.Portal>
-      </ContextMenu.Root>
+      </ContextMenuRoot>
     </div>
   );
 };

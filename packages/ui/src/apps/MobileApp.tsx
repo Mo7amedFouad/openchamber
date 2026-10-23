@@ -31,6 +31,7 @@ import { useUpdatePolling } from '@/hooks/useUpdatePolling';
 import { useWindowTitle } from '@/hooks/useWindowTitle';
 import { useEnterprisePolicySync } from '@/hooks/useEnterprisePolicySync';
 import { useRoutingSync } from '@/hooks/useRoutingSync';
+import { useSourceControlProviderSync } from '@/hooks/useSourceControlProviderSync';
 import { useAgentMemorySync } from '@/hooks/useAgentMemorySync';
 import { resolvePlanRequestOwner } from '@/hooks/useProjectContextOwner';
 import { opencodeClient } from '@/lib/opencode/client';
@@ -50,7 +51,8 @@ import { cn } from '@/lib/utils';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
-import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
+import { useSourceControlProviderRegistry } from '@/lib/source-control/providers/registry';
+import { refreshTrackers } from '@/stores/useTrackerAuthStore';
 import { useGitStore } from '@/stores/useGitStore';
 import { useMcpConfigStore, type McpDraft } from '@/stores/useMcpConfigStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
@@ -67,7 +69,7 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { SyncProvider } from '@/sync/sync-context';
 
 import { SyncAppEffects } from './AppEffects';
-import { BusyDots } from '@/components/chat/message/parts/BusyDots';
+import { BusyDots } from '@/components/ui/busy-dots';
 import { MobileConnectionWelcome, type MobileConnectionNotice } from './MobileConnectionWelcome';
 import { MobileHeader } from './MobileHeader';
 import { MobileInstancesSurface } from './MobileInstancesSurface';
@@ -76,8 +78,10 @@ import { MobileFullscreenSurface } from './MobileFullscreenSurface';
 import { UsageStatsView } from '@/components/views/usage/UsageStatsView';
 import { ArchiveSessionsView } from '@/components/views/ArchiveView';
 import { MobileSourceBoard } from '@/components/sourceBoard/SourceBoardView';
+import { OverviewPage } from '@/components/overview/OverviewView';
 import { ScheduledTasksView, type ScheduledTasksLeaveReason } from '@/components/session/ScheduledTasksDialog';
-import { MobileWorkspaceDrawer, type MobileWorkspaceTab } from './MobileWorkspaceDrawer';
+import { MobileWorkspaceDrawer } from './MobileWorkspaceDrawer';
+import { shownMobileWorkspaceTabs, type MobileWorkspaceTab } from '@/lib/mobileWorkspaceTabs';
 import { DedicatedMobileAppProvider, type MobileAppActions } from './mobileAppContext';
 import { autoConnectLastInstance, getAutoConnectTargetLabel, logMobileConnectEvent, reprobeActiveConnection, suppressAutoConnectUntilManualConnect, type AutoConnectOutcome } from './mobileConnections';
 import { isCapacitorMobileApp, useNativeAndroidBackButton, useNativeMobileChrome, useNativeMobileLifecycle } from './mobileNativeChrome';
@@ -131,7 +135,7 @@ const NATIVE_RESUME_SYNC_EVENT_THROTTLE_MS = 1_000;
     footer. Exactly one can be open at a time — opening another replaces it,
     closing returns to the chat. The sessions drawer and the workspace drawer
     (Changes / Files / Terminal / Notes / MCP) are separate layers. */
-type MobileSurface = 'archive' | 'board' | 'instances' | 'scheduled' | 'settings' | 'update' | 'usage';
+type MobileSurface = 'archive' | 'board' | 'overview' | 'instances' | 'scheduled' | 'settings' | 'update' | 'usage';
 
 const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onActiveConnectionDeleted }) => {
   const { t, direction } = useI18n();
@@ -155,6 +159,15 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
   // open/close so the right-edge swipe reopens where the user left off.
   const [workspaceOpen, setWorkspaceOpen] = React.useState(false);
   const [workspaceTab, setWorkspaceTab] = React.useState<MobileWorkspaceTab>('changes');
+  // Opening the drawer itself lands on the last tab, unless the user has since
+  // hidden it in Settings; then on their first tab. A trigger that asks for a
+  // tab (a changed file in the chat) sets it on its own and opens it hidden or not.
+  const openWorkspace = React.useCallback(() => {
+    const { mobileWorkspaceTabOrder, mobileWorkspaceHiddenTabs } = useUIStore.getState();
+    const shown = shownMobileWorkspaceTabs(mobileWorkspaceTabOrder, mobileWorkspaceHiddenTabs);
+    setWorkspaceTab((current) => (shown.includes(current) ? current : shown[0]));
+    setWorkspaceOpen(true);
+  }, []);
   // A plan opened from the workspace drawer's Notes tab, shown as a fullscreen
   // layer on top of it (back returns to the notes).
   const [openPlan, setOpenPlan] = React.useState<{ id: string; title: string; projectRef: ProjectRef } | null>(null);
@@ -352,7 +365,7 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
     if (isTabletLayout) setSidebarOpen(true);
     else setSessionsSheetOpen(true);
   };
-  const openWorkspaceFromEdge = () => setWorkspaceOpen(true);
+  const openWorkspaceFromEdge = () => openWorkspace();
   useEdgeSwipe(chatMainRef, {
     onLeftEdgeSwipe: direction === 'rtl' ? openWorkspaceFromEdge : openSessionsFromEdge,
     onRightEdgeSwipe: direction === 'rtl' ? openSessionsFromEdge : openWorkspaceFromEdge,
@@ -411,6 +424,7 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
 
   // App-level footer of the sessions list — the same on a phone drawer and a
   // tablet sidebar: connected instance, pending web update, settings.
+  const overviewAvailable = useUIStore((state) => state.overviewFeatureAvailable);
   const sessionsFooter = React.useMemo(
     () => ({
       instanceLabel: showCapacitorOnlyFeatures ? getAutoConnectTargetLabel() : null,
@@ -419,10 +433,11 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
       onOpenUsage: () => openSurface('usage'),
       onOpenScheduled: () => openSurface('scheduled'),
       onOpenArchive: () => openSurface('archive'),
+      onOpenOverview: overviewAvailable ? () => openSurface('overview') : undefined,
       onOpenSourceBoard: () => openSurface('board'),
       onOpenUpdate: showUpdateItem ? () => openSurface('update') : undefined,
     }),
-    [openSettingsSurface, openSurface, showCapacitorOnlyFeatures, showUpdateItem],
+    [openSettingsSurface, openSurface, overviewAvailable, showCapacitorOnlyFeatures, showUpdateItem],
   );
 
   // A started run or a loop file to edit replaces the page: back to the chat,
@@ -438,6 +453,13 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
     closeSurface();
     setSessionsSheetOpen(false);
   }, [closeSurface]);
+
+  // A session opened from the overview replaces the page: back to the chat.
+  const leaveOverview = React.useCallback(() => {
+    closeSurface();
+    setSessionsSheetOpen(false);
+    if (isTabletLayout && !roomyForPanels) setSidebarOpen(false);
+  }, [closeSurface, isTabletLayout, roomyForPanels]);
 
   // An opened archived session replaces the page: back to the chat, the same
   // way picking a session from the list gives the space back.
@@ -557,7 +579,7 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
         <div className="flex h-full min-w-0 flex-1 flex-col" data-page-scroll-lock="true">
           <MobileHeader
             onOpenSessions={() => (isTabletLayout ? toggleSidebar() : setSessionsSheetOpen(true))}
-            onOpenWorkspace={() => setWorkspaceOpen(true)}
+            onOpenWorkspace={openWorkspace}
             compactTitle={isTabletLayout}
           />
           <main ref={chatMainRef} className="relative min-h-0 flex-1 overflow-hidden" data-page-scroll-lock="true">
@@ -742,6 +764,21 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
           </MobileFullscreenSurface>
         ) : null}
 
+        {activeSurface === 'overview' && overviewAvailable ? (
+          <MobileFullscreenSurface
+            open
+            variant={surfaceVariant}
+            dialogAlign="app"
+            onClose={closeSurface}
+            ariaLabel={t('overview.title')}
+            title={t('overview.title')}
+          >
+            <ErrorBoundary>
+              <OverviewPage layout="mobile" onLeave={leaveOverview} />
+            </ErrorBoundary>
+          </MobileFullscreenSurface>
+        ) : null}
+
         {activeSurface === 'archive' ? (
           <MobileFullscreenSurface
             open
@@ -794,7 +831,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
   const clearError = useSessionUIStore((state) => state.clearError);
   const setIsMobile = useUIStore((state) => state.setIsMobile);
   const refreshSourceControlAuth = useSourceControlAuthStore((state) => state.refreshAll);
-  const refreshLinearAuthStatus = useLinearAuthStore((state) => state.refreshStatus);
+  const refreshSourceControlProviders = useSourceControlProviderRegistry((state) => state.refresh);
   const projects = useProjectsStore((state) => state.projects);
   // The mobile shell has no layout-level session list sync, so a lost
   // `session.deleted` is reconciled here from the same complete global
@@ -852,8 +889,9 @@ function MobileAppContent({ apis }: MobileAppProps) {
     // only refresh in place when the transport is 'unchanged'.
     const refreshInPlace = () => {
       void initializeApp();
+      void refreshSourceControlProviders(apis.sourceControl);
       void refreshSourceControlAuth(apis.sourceControl, { force: true });
-      void refreshLinearAuthStatus(apis.linear, { force: true });
+      void refreshTrackers(apis.trackers);
       if (providersCount === 0) void loadProviders({ source: 'mobileApp:nativeResume' });
       if (agentsCount === 0) void loadAgents({ source: 'mobileApp:nativeResume' });
     };
@@ -936,7 +974,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
       lastNativeResumeSyncEventAtRef.current = now;
       window.dispatchEvent(new Event('openchamber:system-resume'));
     }
-  }, [agentsCount, apis.sourceControl, apis.linear, initializeApp, loadAgents, loadProviders, providersCount, refreshSourceControlAuth, refreshLinearAuthStatus]);
+  }, [agentsCount, apis.sourceControl, apis.trackers, initializeApp, loadAgents, loadProviders, providersCount, refreshSourceControlAuth, refreshSourceControlProviders]);
 
   useNativeMobileChrome();
   useNativeMobileLifecycle(handleNativeResume);
@@ -1206,9 +1244,10 @@ function MobileAppContent({ apis }: MobileAppProps) {
   // answer that stuck until something else forced a re-check.
   React.useEffect(() => {
     if (!isConnected) return;
+    void refreshSourceControlProviders(apis.sourceControl);
     void refreshSourceControlAuth(apis.sourceControl, { force: true });
-    void refreshLinearAuthStatus(apis.linear, { force: true });
-  }, [apis.sourceControl, apis.linear, isConnected, refreshSourceControlAuth, refreshLinearAuthStatus]);
+    void refreshTrackers(apis.trackers);
+  }, [apis.sourceControl, apis.trackers, isConnected, refreshSourceControlAuth, refreshSourceControlProviders]);
 
   // Discover all worktrees for every known project so the draft session's
   // worktree/branch dropdown can list every available branch — not only the
@@ -1311,6 +1350,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
   useWindowTitle();
   useRoutingSync();
   useEnterprisePolicySync();
+  useSourceControlProviderSync(apis.sourceControl);
   // Same as App.tsx: the session's memory index and the Memory tab both read
   // this snapshot, and without it the phone showed no memory at all.
   useAgentMemorySync(currentDirectory || null);
@@ -1365,7 +1405,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
                   <h1 className="typography-h3 text-foreground">{t('sessionAuth.error.networkTitle')}</h1>
                   {/* Native copy — the browser-oriented sessionAuth description
                       (Desktop Network Access etc.) reads as noise here. */}
-                  <p className="typography-body text-muted-foreground">{t('mobile.connect.recovery.description')}</p>
+                  <p className="typography-markdown text-muted-foreground">{t('mobile.connect.recovery.description')}</p>
                 </div>
                 <Button
                   type="button"
@@ -1429,7 +1469,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
       <main className="flex min-h-dvh items-center justify-center bg-background px-6 text-center text-foreground">
         <div className="max-w-sm space-y-3">
           <h1 className="typography-h3 text-foreground">{t('sessionAuth.error.networkTitle')}</h1>
-          <p className="typography-body text-muted-foreground">{t('sessionAuth.error.networkDescription')}</p>
+          <p className="typography-markdown text-muted-foreground">{t('sessionAuth.error.networkDescription')}</p>
         </div>
       </main>
     );

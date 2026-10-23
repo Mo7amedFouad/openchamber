@@ -13,6 +13,7 @@ import { useCommandsStore } from '@/stores/useCommandsStore';
 import { useMcpConfigStore } from '@/stores/useMcpConfigStore';
 import { useSnippetsStore } from '@/stores/useSnippetsStore';
 import { projectSettingsTabForSearchTarget, useProjectSettingsTabStore } from '@/components/sections/projects/projectSettingsTabs';
+import { chatSettingsTabForSearchTarget, useChatSettingsTabStore } from '@/components/sections/openchamber/chatSettingsTabs';
 import { useSkillsStore } from '@/stores/useSkillsStore';
 import { useSkillsCatalogStore } from '@/stores/useSkillsCatalogStore';
 import { Tooltip, TooltipTrigger } from '@/components/ui/tooltip';
@@ -56,6 +57,7 @@ import { isDesktopLocalOriginActive, isDesktopShell, isVSCodeRuntime, isWebRunti
 import { useI18n } from '@/lib/i18n';
 import { Icon } from "@/components/icon/Icon";
 import { McpIcon } from '@/components/icons/McpIcon';
+import { settingsPageTitleKey } from '@/lib/settings/pageTitle';
 import {
   SETTINGS_PAGE_METADATA,
   getSettingsNavIcon,
@@ -66,12 +68,20 @@ import {
   type SettingsPageMeta,
 } from '@/lib/settings/metadata';
 import { buildSettingsSearchResults, type SettingsSearchResult } from '@/lib/settings/search';
+import { useTrackerDescriptors } from '@/lib/trackers/registry';
+import { useSourceControlProviders } from '@/lib/source-control/providers/registry';
 
 // UI Kit: fixed split-page sidebar width
 const SETTINGS_SPLIT_SIDEBAR_WIDTH = 280;
 // The desktop close button: top-1 offset plus its h-7 height.
 const SETTINGS_CLOSE_BUTTON_CLEARANCE = 32;
 const SETTINGS_DETAIL_HISTORY_KEY = '__openchamberSettingsDetail';
+/** The Chat page shows one tab at a time: open the one that holds the item. */
+const openChatSettingsTabFor = (itemId: string): void => {
+  const chatTab = chatSettingsTabForSearchTarget(itemId);
+  if (chatTab) useChatSettingsTabStore.getState().setTab(chatTab);
+};
+
 /** How long (in frames, ~0.5 s) a search result or a link waits for its item to render. */
 const PENDING_ITEM_MAX_FRAMES = 30;
 
@@ -327,70 +337,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     'isolated-spaces': 'spaces',
   }), []);
 
-  const getPageTitle = React.useCallback((slug: SettingsPageSlug): string => {
-    switch (slug) {
-      case 'general':
-        return t('settings.page.general.title');
-      case 'projects':
-        return t('settings.page.projects.title');
-      case 'remote-instances':
-        return t('settings.page.remoteInstances.title');
-      case 'providers':
-        return t('settings.page.providers.title');
-      case 'web-search':
-        return t('settings.page.webSearch.title');
-      case 'usage':
-        return t('settings.page.usage.title');
-      case 'agents':
-        return t('settings.page.agents.title');
-      case 'behavior':
-        return t('settings.page.behavior.title');
-      case 'commands':
-        return t('settings.page.commands.title');
-      case 'mcp':
-        return t('settings.page.mcp.title');
-      case 'plugins':
-        return t('settings.page.plugins.title');
-      case 'skills.installed':
-        return t('settings.page.skills.title');
-      case 'skills.catalog':
-        return t('settings.page.skillsCatalog.title');
-      case 'git':
-        return t('settings.page.git.title');
-      case 'integrations':
-        return t('settings.page.integrations.title');
-      case 'extensions':
-        return t('settings.page.extensions.title');
-      case 'appearance':
-        return t('settings.page.appearance.title');
-      case 'chat':
-        return t('settings.page.chat.title');
-      case 'shortcuts':
-        return t('settings.page.shortcuts.title');
-      case 'sessions':
-        return t('settings.page.sessions.title');
-      case 'routing':
-        return t('settings.page.routing.title');
-      case 'magic-prompts':
-        return t('settings.page.magicPrompts.title');
-      case 'snippets':
-        return t('settings.page.snippets.title');
-      case 'notifications':
-        return t('settings.page.notifications.title');
-      case 'voice':
-        return t('settings.page.voice.title');
-      case 'tunnel':
-        return t('settings.page.tunnel.title');
-      case 'isolated-spaces':
-        return t('settings.openchamber.spaces.title');
-      case 'about':
-        return t('settings.page.about.title');
-      case 'home':
-      default:
-        return t('settings.view.home.title');
-    }
-  }, [t]);
+  const getPageTitle = React.useCallback((slug: SettingsPageSlug): string => t(settingsPageTitleKey(slug)), [t]);
 
+  const trackers = useTrackerDescriptors();
+  const sourceControlProviders = useSourceControlProviders();
   const settingsSearchResults = React.useMemo(() => {
     return buildSettingsSearchResults({
       query: settingsSearchQuery,
@@ -398,8 +348,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       visiblePageSlugs,
       t,
       getPageTitle,
+      trackers,
+      sourceControlProviders,
     });
-  }, [getPageTitle, isDesktopLocalOrigin, isMac, isWindows, isLinux, runtimeCtx, settingsSearchQuery, t, visiblePageSlugs]);
+  }, [getPageTitle, isDesktopLocalOrigin, isMac, isWindows, isLinux, runtimeCtx, settingsSearchQuery, sourceControlProviders, t, trackers, visiblePageSlugs]);
 
   const prepareSettingsSearchTarget = React.useCallback((result: SettingsSearchResult): string => {
     if (result.id.startsWith('agents.')) {
@@ -475,10 +427,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       return 'plugins.spec';
     }
 
+    // The Git identity picker lives in the Add extension dialog; the add card opens it.
+    if (result.id === 'extensions.gitIdentity') {
+      return 'extensions.add';
+    }
+
     const projectTab = projectSettingsTabForSearchTarget(result.id);
     if (projectTab) {
       useProjectSettingsTabStore.getState().setTab(projectTab);
     }
+
+    openChatSettingsTabFor(result.id);
 
     return result.id;
   }, []);
@@ -580,6 +539,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       return;
     }
     useUIStore.getState().clearSettingsJumpRequest();
+    if (settingsJumpRequest.itemId) openChatSettingsTabFor(settingsJumpRequest.itemId);
     setPendingSearchItemId(settingsJumpRequest.itemId);
     openPage(resolveSettingsSlug(settingsJumpRequest.page));
     if (isMobile) {

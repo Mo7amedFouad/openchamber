@@ -2,7 +2,7 @@
 import * as gitHttp from './gitApiHttp';
 import { mapWithConcurrency } from './concurrency';
 import { opencodeClient } from './opencode/client';
-import { renderMagicPrompt } from './magicPrompts';
+import { loadMagicPrompts } from './magicPrompts';
 import { requestSmallModel } from './smallModelRequest';
 import { materializeOpenDraftSession, useSessionUIStore } from '@/sync/session-ui-store';
 import { useSelectionStore } from '@/sync/selection-store';
@@ -10,7 +10,7 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { notifyGitStatusInvalidated } from './gitStatusInvalidation';
-import type { SourceControlProvider } from '@/lib/source-control/types';
+import type { SourceControlProviderDescriptor } from '@/lib/source-control/providers/descriptor';
 
 export type {
   GitRemote,
@@ -78,6 +78,13 @@ export async function getGitStatus(directory: string, options?: { mode?: 'light'
 export async function resolveGitPrimaryRoot(directory: string): Promise<string> {
   const result = await gitHttp.resolveGitPrimaryRoot(directory);
   return result.root;
+}
+
+/** Where `directory` sits inside its repository's checkout; `''` at the root. Rejects when unknown. */
+export async function resolveGitRepositoryPrefix(directory: string): Promise<string> {
+  const runtime = getRuntimeGit();
+  if (runtime?.resolveRepositoryPrefix) return runtime.resolveRepositoryPrefix(directory);
+  return gitHttp.resolveGitRepositoryPrefix(directory);
 }
 
 export async function resolveGitTopLevel(directory: string): Promise<string> {
@@ -268,8 +275,9 @@ export async function generateCommitMessage(
   });
 
   const recentCommits = await collectRecentCommitSubjects(directory);
-  const visiblePrompt = await renderMagicPrompt('git.commit.generate.visible');
-  const hiddenPrompt = await renderMagicPrompt('git.commit.generate.instructions', {
+  const prompts = await loadMagicPrompts(directory);
+  const visiblePrompt = prompts.render('git.commit.generate.visible');
+  const hiddenPrompt = prompts.render('git.commit.generate.instructions', {
     selected_files: files.map((file) => `- ${file}`).join('\n'),
     recent_commits: recentCommits,
   });
@@ -373,13 +381,11 @@ const readOptionalRepoTextFile = async (directory: string, relativePath: string)
 // A repository that ships a PR template expects descriptions in its shape, so
 // the template wins over the built-in section layout. Missing template is the
 // normal case, not a failure: probing stops at the first file that has content.
-const collectPullRequestTemplate = async (directory: string, provider: SourceControlProvider | undefined): Promise<string> => {
-  // A GitLab project's own merge request template comes before any GitHub-style one it may also carry.
-  const gitlabTemplate = '.gitlab/merge_request_templates/Default.md';
-  const paths = provider === 'gitlab'
-    ? [gitlabTemplate, ...PULL_REQUEST_TEMPLATE_PATHS.filter((candidate) => candidate !== gitlabTemplate)]
-    : PULL_REQUEST_TEMPLATE_PATHS;
-  const noun = provider === 'gitlab' ? 'merge request' : 'pull request';
+const collectPullRequestTemplate = async (directory: string, provider: ChangeRequestProviderWords | undefined): Promise<string> => {
+  // A provider's own templates (GitLab's merge request template) come before any GitHub-style one the project may also carry.
+  const own = provider?.features.changeRequestTemplates ?? [];
+  const paths = [...own, ...PULL_REQUEST_TEMPLATE_PATHS.filter((candidate) => !own.includes(candidate))];
+  const noun = provider?.terminology.promptNoun ?? 'pull request';
   for (const relativePath of paths) {
     const content = await readOptionalRepoTextFile(directory, relativePath);
     const trimmed = content?.trim();
@@ -404,9 +410,12 @@ const collectPullRequestTemplate = async (directory: string, provider: SourceCon
   return '';
 };
 
+/** What a generation prompt says of the project's provider: its name, its English noun, its template paths. */
+type ChangeRequestProviderWords = Pick<SourceControlProviderDescriptor, 'label' | 'terminology' | 'features'>;
+
 export async function generatePullRequestDescription(
   directory: string,
-  payload: { base: string; head: string; context?: string; zenModel?: string; providerId?: string; modelId?: string; changeRequestProvider?: SourceControlProvider }
+  payload: { base: string; head: string; context?: string; zenModel?: string; providerId?: string; modelId?: string; changeRequestProvider?: ChangeRequestProviderWords }
 ): Promise<import('./api/types').GeneratedPullRequestDescription> {
   const startedAt = Date.now();
 
@@ -457,10 +466,13 @@ export async function generatePullRequestDescription(
     changedFiles: changedFiles.length,
   });
 
-  const visiblePrompt = await renderMagicPrompt('git.pr.generate.visible', {
-    change_request: payload.changeRequestProvider === 'gitlab' ? 'GitLab merge request' : 'GitHub pull request',
+  const prompts = await loadMagicPrompts(directory);
+  const visiblePrompt = prompts.render('git.pr.generate.visible', {
+    change_request: payload.changeRequestProvider
+      ? `${payload.changeRequestProvider.label} ${payload.changeRequestProvider.terminology.promptNoun}`
+      : 'pull request',
   });
-  const hiddenPrompt = await renderMagicPrompt('git.pr.generate.instructions', {
+  const hiddenPrompt = prompts.render('git.pr.generate.instructions', {
     base_branch: payload.base,
     head_branch: payload.head,
     commits: commits.map((commit) => {
@@ -948,6 +960,21 @@ export async function resetToCommit(
   const runtime = getRuntimeGit();
   if (runtime) return runtimeStatusMutation(directory, runtime.resetToCommit(directory, hash, mode, force));
   return gitHttp.resetToCommit(directory, hash, mode, force);
+}
+
+/**
+ * Whether `directory` exists inside the checkout at `worktreeRoot` once both
+ * are canonicalized, so a symlink out of the checkout reports `insideWorktreeRoot: false`.
+ */
+export async function validateWorktreeDirectory(directory: string, worktreeRoot: string): Promise<{
+  valid: boolean;
+  insideWorktreeRoot: boolean;
+  resolvedWorktreeRoot: string | null;
+  resolvedCwd: string | null;
+}> {
+  const runtime = getRuntimeGit();
+  if (runtime?.validateWorktreeDirectory) return runtime.validateWorktreeDirectory(directory, worktreeRoot);
+  return gitHttp.validateWorktreeDirectory(directory, worktreeRoot);
 }
 
 export async function getConflictDetails(directory: string): Promise<import('./api/types').MergeConflictDetails> {

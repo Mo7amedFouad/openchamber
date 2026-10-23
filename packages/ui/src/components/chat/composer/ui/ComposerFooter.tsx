@@ -25,7 +25,7 @@ import { isVSCodeRuntime } from '@/lib/desktop';
 import { isDictationCaptureSupported } from '@/lib/dictation/use-dictation-audio-source';
 import { ModelControls } from '../../ModelControls';
 import { ComposerActionButtons } from './ComposerActionButtons';
-import { ComposerAttachmentControls } from './ComposerAttachmentControls';
+import { ComposerAttachmentControls, type ComposerTrackerPicker } from './ComposerAttachmentControls';
 import { FocusModeButton } from './FocusModeButton';
 import { PermissionAutoAcceptButton } from './PermissionAutoAcceptButton';
 import type { PermissionMode } from '@/stores/utils/permissionAutoAccept';
@@ -62,16 +62,14 @@ interface ComposerFooterProps {
     onPickLocalFiles: () => void;
     onOpenGitHubPicker: () => void;
     /** The host the project's issues and change requests come from. */
-    repositoryProvider?: SourceControlProvider;
-    showLinearPicker?: boolean;
-    onOpenLinearPicker?: () => void;
+    repositoryProvider?: SourceControlProvider | null;
+    trackerPickers?: readonly ComposerTrackerPicker[];
     attachGuests?: readonly GuestAttachItem[];
     onOpenGuestAttach?: (guestId: string) => void;
     onOpenAttachSheet: () => void;
     onToggleExpandedInput: () => void;
     onCyclePermissionMode: () => void;
     onPrimaryAction: () => void;
-    onQueueMessage: () => void;
     onAbort: () => void;
     onStartDictation: () => void;
     onDictationInsert: (text: string) => void;
@@ -135,15 +133,13 @@ function ComposerFooterView(props: ComposerFooterProps) {
         onPickLocalFiles,
         onOpenGitHubPicker,
         repositoryProvider,
-        showLinearPicker,
-        onOpenLinearPicker,
+        trackerPickers,
         attachGuests,
         onOpenGuestAttach,
         onOpenAttachSheet,
         onToggleExpandedInput,
         onCyclePermissionMode,
         onPrimaryAction,
-        onQueueMessage,
         onAbort,
         onStartDictation,
         onDictationInsert,
@@ -192,8 +188,7 @@ function ComposerFooterView(props: ComposerFooterProps) {
                                 handlePickLocalFiles={onPickLocalFiles}
                                 openGitHubPicker={onOpenGitHubPicker}
                                 repositoryProvider={repositoryProvider}
-                                showLinearPicker={showLinearPicker}
-                                openLinearPicker={onOpenLinearPicker}
+                                trackerPickers={trackerPickers}
                                 onOpenSettings={isBtw ? undefined : onOpenSettings}
                                 onOpenMobileSheet={onOpenAttachSheet}
                                 attachGuests={attachGuests}
@@ -250,7 +245,6 @@ function ComposerFooterView(props: ComposerFooterProps) {
                                     currentSessionId={currentSessionId}
                                     newSessionDraftOpen={newSessionDraftOpen}
                                     onPrimaryAction={onPrimaryAction}
-                                    onQueueMessage={onQueueMessage}
                                     onAbort={onAbort}
                                 />
                             </div>
@@ -267,8 +261,7 @@ function ComposerFooterView(props: ComposerFooterProps) {
                             handlePickLocalFiles={onPickLocalFiles}
                             openGitHubPicker={onOpenGitHubPicker}
                             repositoryProvider={repositoryProvider}
-                            showLinearPicker={showLinearPicker}
-                            openLinearPicker={onOpenLinearPicker}
+                            trackerPickers={trackerPickers}
                             onOpenSettings={isBtw ? undefined : onOpenSettings}
                             attachGuests={attachGuests}
                             onOpenGuestAttach={onOpenGuestAttach}
@@ -330,7 +323,6 @@ function ComposerFooterView(props: ComposerFooterProps) {
                                 currentSessionId={currentSessionId}
                                 newSessionDraftOpen={newSessionDraftOpen}
                                 onPrimaryAction={parallelRun.onLaunch}
-                                onQueueMessage={onQueueMessage}
                                 onAbort={onAbort}
                                 sendLabel={t('chat.parallel.runAria', { count: parallelRun.runCount })}
                             />
@@ -345,7 +337,6 @@ function ComposerFooterView(props: ComposerFooterProps) {
                             currentSessionId={currentSessionId}
                             newSessionDraftOpen={newSessionDraftOpen}
                             onPrimaryAction={onPrimaryAction}
-                            onQueueMessage={onQueueMessage}
                             onAbort={onAbort}
                         />}
                     </div>

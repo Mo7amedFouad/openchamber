@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM oven/bun:1.4.3 AS base
+FROM oven/bun:1.4.4 AS base
 WORKDIR /app
 
 FROM base AS deps
@@ -24,7 +24,7 @@ COPY . .
 RUN bun run --cwd packages/sdk build
 RUN bun run build:web
 
-FROM oven/bun:1.4.3 AS runtime
+FROM oven/bun:1.4.4 AS runtime
 ARG TARGETARCH
 WORKDIR /home/openchamber
 
@@ -163,7 +163,7 @@ ENV PATH=${NPM_CONFIG_PREFIX}/bin:${PATH}
 
 RUN npm config set prefix /home/openchamber/.npm-global && mkdir -p /home/openchamber/.npm-global && \
   mkdir -p /home/openchamber/.local /home/openchamber/.config /home/openchamber/.ssh && \
-  npm install -g @opencode/cli@2.0.29 && \
+  npm install -g @opencode/cli@2.1.4 && \
   npm install -g \
     typescript tsx \
     pnpm \

@@ -4,6 +4,7 @@ import type { Part } from '@/lib/opencode/model';
 import { Icon } from '@/components/icon/Icon';
 import { useI18n, type I18nKey, type I18nParams } from '@/lib/i18n';
 import { useUIStore } from '@/stores/useUIStore';
+import { useSourceControlDescriptorOf, type SourceControlDescriptorOf } from '@/lib/source-control/providers/registry';
 import { cn } from '@/lib/utils';
 import { getMessagePreview } from '../lib/messagePreview';
 import { useChatColumnActions } from '../chatColumnSession';
@@ -31,7 +32,9 @@ const PREVIEW_MAX_CHARS = 160;
 // of user bubbles (expand/collapse).
 const GUTTER_WIDTH_PX = 28;
 const GUTTER_NARROW_WIDTH_PX = 12;
-const GUTTER_RIGHT_OFFSET_PX = 6;
+// Keeps the ticks a visible gap away from the chat's overlay scrollbar thumb
+// (6px wide, 4px from the edge).
+const GUTTER_RIGHT_OFFSET_PX = 14;
 // The rail shows at most a window of ticks; hovering the gutter edges
 // carousels the window through the rest of the prompts.
 const MAX_VISIBLE_TICKS = 30;
@@ -63,12 +66,13 @@ const buildPromptEntries = (
     turnIds: string[],
     previewsByTurnId: Map<string, Part[]>,
     t: (key: I18nKey, params?: I18nParams) => string,
+    descriptorOf: SourceControlDescriptorOf,
 ): PromptEntry[] => {
     return turnIds.map((turnId) => {
         const parts = previewsByTurnId.get(turnId) ?? [];
         return {
             turnId,
-            preview: getMessagePreview(parts, PREVIEW_MAX_CHARS, t),
+            preview: getMessagePreview(parts, PREVIEW_MAX_CHARS, t, descriptorOf),
         };
     });
 };
@@ -100,6 +104,7 @@ export function PromptNavigatorRail({
     onLoadEarlier,
 }: PromptNavigatorRailProps) {
     const { t } = useI18n();
+    const descriptorOf = useSourceControlDescriptorOf();
     // The keyboard shortcut drives the main chat's rail; a pinned column's
     // rail neither opens on it nor closes it.
     const { pinned } = useChatColumnActions();
@@ -136,8 +141,8 @@ export function PromptNavigatorRail({
     }, []);
 
     const prompts = React.useMemo(
-        () => buildPromptEntries(turnIds, previewsByTurnId, t),
-        [previewsByTurnId, t, turnIds],
+        () => buildPromptEntries(turnIds, previewsByTurnId, t, descriptorOf),
+        [descriptorOf, previewsByTurnId, t, turnIds],
     );
 
     const visibleCount = Math.min(prompts.length, MAX_VISIBLE_TICKS);
@@ -550,7 +555,7 @@ export function PromptNavigatorRail({
         <nav
             ref={navRef}
             aria-label={t('chat.promptNavigator.aria')}
-            className="pointer-events-none absolute inset-e-1.5 top-1/2 z-20 -translate-y-1/2"
+            className="pointer-events-none absolute inset-e-3.5 top-1/2 z-20 -translate-y-1/2"
         >
             <div className="pointer-events-auto flex flex-col items-end">
                 {canLoadEarlier ? (

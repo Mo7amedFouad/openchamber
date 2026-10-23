@@ -1,6 +1,6 @@
 import { DirectoryActionIndicator } from '../sessions/DirectoryActionIndicator';
-import { useTrackedIssueStates, useTrackedLinearStates } from '@/stores/useTrackedItemsStore';
-import { githubThread, gitlabThread, linearIssue } from '@/lib/trackedItems/fromLinks';
+import { useTrackedIssueStates, useTrackedWorkItemStates } from '@/stores/useTrackedItemsStore';
+import { repositoryThread, workItem } from '@/lib/trackedItems/fromLinks';
 import React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Session } from '@/lib/opencode/model';
@@ -12,11 +12,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { getPrStatusLabel } from '../prStatusLabel';
 import { Button } from '@/components/ui/button';
 import { Icon } from "@/components/icon/Icon";
+import { Spinner } from "@/components/ui/spinner";
 import { FileTreeChevron } from '@/components/views/files/FileTreeRowParts';
 import { sessionTreeRowPaddingLeft } from '../sessions/sessionTreeGeometry';
 import { cn } from '@/lib/utils';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { useUIStore } from '@/stores/useUIStore';
+import { useProjectsStore } from '@/stores/useProjectsStore';
 import { SessionFolderItem } from '../../SessionFolderItem';
 import type { SortableDragHandleProps } from './sortableItems';
 import { DroppableFolderWrapper, SessionFolderDndScope } from '../folders/sessionFolderDnd';
@@ -39,7 +41,7 @@ import { useFreshestSourceControlVisualSummaryForBranch } from '@/stores/useGitH
 type FolderScope = { scopeKey: string; directory: string | null };
 import { getLinkedSidebarIssues, type LinkedSidebarIssue } from '@/lib/linkedIssues';
 import { buildSessionIssueItems } from '../sessions/sessionPrSummaries';
-import { useOpenOnBoard } from '@/components/sourceBoard/openOnBoard';
+import { useOpenTrackerItem } from '@/components/sourceBoard/openTrackerItem';
 import { SIDEBAR_REF_TOOLTIP_CLOSE_DELAY_MS, SidebarRefLinks, type SidebarRefLink } from '../sessions/SidebarRefLinks';
 import { useI18n } from '@/lib/i18n';
 import { useChildStoreManager } from '@/sync/sync-context';
@@ -56,7 +58,8 @@ import { useSpaceTakesNoNewSession, useSpacesStore } from '@/lib/spaces/spaces-s
 import { useShiftKeyHeld } from '@/hooks/useShiftKeyHeld';
 import type { WorktreeMetadata } from '@/types/worktree';
 import { useWorktreeRemoving } from '@/lib/worktrees/worktreeRemovalState';
-import { formatChangeRequestReference } from '@/lib/source-control/identity';
+import { formatChangeRequestReference } from '@/lib/source-control/providers/terminology';
+import { useRepositoryUrlMatcher } from '@/lib/source-control/repositoryUrlMatcher';
 import { refTintStyle } from '@/lib/source-control/prVisualState';
 
 type DeleteFolderConfirm = {
@@ -92,7 +95,6 @@ export type SessionGroupSectionProps = {
   openNewSessionDraft: (options?: { selectedProjectId?: string | null; directoryOverride?: string | null; preserveDirectoryOverride?: boolean; targetFolderId?: string; target?: 'chat' | 'project' }) => void;
   pinnedSessionIds: Set<string>;
   sessionOrderIndex: Map<string, number>;
-  notifyOnSubtasks: boolean;
   expandedParents: Set<string>;
   editingId: string | null;
   editingRowKey: string | null;
@@ -127,12 +129,8 @@ export type SessionGroupSectionProps = {
 
 const CollapsedFolderActivity: React.FC<{
   nodes: SessionNode[];
-  includeUnreadSubtasks: boolean;
   children: (state: ReturnType<typeof useCollapsedSessionActivityState>) => React.ReactNode;
-}> = ({ nodes, includeUnreadSubtasks, children }) => children(useCollapsedSessionActivityState({
-  nodes,
-  includeUnreadSubtasks,
-}));
+}> = ({ nodes, children }) => children(useCollapsedSessionActivityState({ nodes }));
 
 const groupContainsSessionId = (group: SessionGroup, sessionId: string | null): boolean => {
   if (!sessionId) return false;
@@ -250,7 +248,6 @@ const areGroupPropsEqual = (prev: SessionGroupSectionProps, next: SessionGroupSe
     && prev.onToggleCollapsedGroup === next.onToggleCollapsedGroup
     && prev.dragHandleProps === next.dragHandleProps
     && prev.renderBody === next.renderBody
-    && prev.notifyOnSubtasks === next.notifyOnSubtasks
     && prev.setEditingId === next.setEditingId
     && prev.setEditingRowKey === next.setEditingRowKey
     && prev.setEditTitle === next.setEditTitle
@@ -320,7 +317,7 @@ const EMPTY_GROUP_ISSUES: readonly LinkedSidebarIssue[] = [];
 
 function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNode {
   const { t } = useI18n();
-  const openOnBoard = useOpenOnBoard();
+  const openTrackerItem = useOpenTrackerItem();
   const spaceTakesNoNewSession = useSpaceTakesNoNewSession(props.group.space?.id);
   const spaceLineSpeaks = useSpacesStore((state) => {
     const spaceId = props.group.space?.id;
@@ -350,7 +347,6 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     openNewSessionDraft,
     pinnedSessionIds,
     sessionOrderIndex,
-    notifyOnSubtasks,
     onToggleCollapsedGroup,
     dragHandleProps,
     compactBodyPadding = false,
@@ -363,6 +359,13 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     setFolderRenameDraft,
     clearFolderRename,
   } = props;
+  // Chips open their link in the Tracker through this group's project. The
+  // project's root path resolves there without the live worktree map, which a
+  // worktree group's own directory does not until its topology arrives.
+  const projectDirectory = useProjectsStore((state) =>
+    projectId ? state.projects.find((entry) => entry.id === projectId)?.path ?? null : null,
+  );
+  const boardDirectory = projectDirectory ?? group.directory ?? null;
   const toggleFolderCollapse = useSessionFoldersStore((state) => state.toggleFolderCollapse);
   const renameFolder = useSessionFoldersStore((state) => state.renameFolder);
   const deleteFolder = useSessionFoldersStore((state) => state.deleteFolder);
@@ -392,8 +395,10 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     : group.branch?.trim() || null;
   const groupPrSummary = useFreshestSourceControlVisualSummaryForBranch(groupPrDirectory, groupPrBranch);
   const groupPrColor = groupPrSummary ? `var(--pr-${groupPrSummary.visualState})` : undefined;
-  const groupPrStatusLabel = getPrStatusLabel(groupPrSummary, t);
-  const groupPrReference = groupPrSummary ? formatChangeRequestReference(groupPrSummary.provider, groupPrSummary.number) : '';
+  const urlMatcher = useRepositoryUrlMatcher();
+  const groupPrDescriptor = urlMatcher.descriptorOf(groupPrSummary?.provider ?? '');
+  const groupPrStatusLabel = getPrStatusLabel(groupPrSummary, groupPrDescriptor.terminology.changeRequest, t);
+  const groupPrReference = groupPrSummary ? formatChangeRequestReference(groupPrDescriptor, groupPrSummary.number) : '';
   const groupPrLabel = groupPrSummary
     ? (groupPrStatusLabel ? `${groupPrReference} · ${groupPrStatusLabel}` : groupPrReference)
     : undefined;
@@ -670,33 +675,28 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     if (groupPrSummary || group.isMain || group.isArchivedBucket || hideGroupLabel) return EMPTY_GROUP_ISSUES;
     const byKey = new Map<string, LinkedSidebarIssue>();
     for (const session of allGroupSessions) {
-      for (const issue of getLinkedSidebarIssues(session)) {
+      for (const issue of getLinkedSidebarIssues(session, urlMatcher)) {
         if (!byKey.has(issue.key)) byKey.set(issue.key, issue);
       }
     }
     return byKey.size > 0 ? [...byKey.values()] : EMPTY_GROUP_ISSUES;
-  }, [allGroupSessions, group.isArchivedBucket, group.isMain, groupPrSummary, hideGroupLabel]);
-  const groupGitHubIssueItems = React.useMemo(
-    () => groupIssues.flatMap((issue) => (issue.source === 'github' ? [githubThread('issue', issue)] : [])),
+  }, [allGroupSessions, group.isArchivedBucket, group.isMain, groupPrSummary, hideGroupLabel, urlMatcher]);
+  const groupRepositoryIssueItems = React.useMemo(
+    () => groupIssues.flatMap((issue) => (issue.source === 'repository' ? [repositoryThread('issue', issue.ref)] : [])),
     [groupIssues],
   );
-  const groupIssueStates = useTrackedIssueStates(groupGitHubIssueItems);
-  const groupLinearItems = React.useMemo(
-    () => groupIssues.flatMap((issue) => (issue.source === 'linear' ? [linearIssue(issue.identifier)] : [])),
+  const groupIssueStates = useTrackedIssueStates(groupRepositoryIssueItems);
+  const groupWorkItems = React.useMemo(
+    () => groupIssues.flatMap((issue) => (issue.source === 'tracker' ? [workItem(issue.provider, issue.identifier)] : [])),
     [groupIssues],
   );
-  const groupLinearStates = useTrackedLinearStates(groupLinearItems);
-  const groupGitLabIssueItems = React.useMemo(
-    () => groupIssues.flatMap((issue) => (issue.source === 'gitlab' ? [gitlabThread('issue', issue.ref)] : [])),
-    [groupIssues],
-  );
-  const groupGitLabIssueStates = useTrackedIssueStates(groupGitLabIssueItems);
+  const groupWorkItemStates = useTrackedWorkItemStates(groupWorkItems);
   const groupIssueItems = React.useMemo(
-    () => buildSessionIssueItems(groupIssues, groupIssueStates, groupLinearStates, groupGitLabIssueStates).map((item) => ({
+    () => buildSessionIssueItems(groupIssues, groupIssueStates, groupWorkItemStates).map((item) => ({
       ...item,
       text: item.statusKey ? `${item.label} · ${t(item.statusKey)}` : item.statusText ? `${item.label} · ${item.statusText}` : item.label,
     })),
-    [groupGitLabIssueStates, groupIssueStates, groupIssues, groupLinearStates, t],
+    [groupIssueStates, groupIssues, groupWorkItemStates, t],
   );
   const primaryGroupIssue = groupIssueItems[0] ?? null;
 
@@ -742,7 +742,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     ? { label: group.branch, color: null as string | null }
     : null;
   const groupActivityIndicator = isCollapsed
-    ? <CollapsedSessionActivityIndicator nodes={sourceGroupNodes} includeUnreadSubtasks={notifyOnSubtasks} />
+    ? <CollapsedSessionActivityIndicator nodes={sourceGroupNodes} />
     : null;
 
   type FolderEntry = (typeof allFoldersForGroup)[number];
@@ -828,7 +828,6 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
               expandedParents={expandedParents}
               hasSessionSearchQuery={hasSessionSearchQuery}
               normalizedSessionSearchQuery={normalizedSessionSearchQuery}
-              notifyOnSubtasks={notifyOnSubtasks}
               editingId={editingId}
               editingRowKey={editingRowKey}
                editTitle={editTitle}
@@ -862,7 +861,6 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     return <CollapsedFolderActivity
       key={folder.id}
       nodes={activityNodesByFolderId.get(folder.id) ?? nodes}
-      includeUnreadSubtasks={notifyOnSubtasks}
     >{item}</CollapsedFolderActivity>;
   };
 
@@ -930,10 +928,10 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
   const groupHeaderRightPadding = alwaysShowActions
     ? (hasThirdHeaderAction ? 'pe-20' : hasSecondHeaderAction ? 'pe-14' : 'pe-7')
     : cn('pe-2', hasThirdHeaderAction
-        ? '[--oc-actions-reserve:68px]'
+        ? '[--oc-actions-reserve:4.25rem]'
         : hasSecondHeaderAction
-        ? '[--oc-actions-reserve:44px]'
-        : '[--oc-actions-reserve:18px]');
+        ? '[--oc-actions-reserve:2.75rem]'
+        : '[--oc-actions-reserve:1.125rem]');
   const headerActionsMaskClass = alwaysShowActions ? undefined : 'group-hover/gh:oc-actions-mask group-has-[:focus-visible]/gh:oc-actions-mask';
   const headerCoveredFadeClass = alwaysShowActions ? undefined : 'transition-opacity group-hover/gh:opacity-0 group-has-[:focus-visible]/gh:opacity-0';
   // An empty group keeps the chevron's place, so its label stays in line.
@@ -1002,7 +1000,6 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     expandedParents={expandedParents}
     hasSessionSearchQuery={hasSessionSearchQuery}
     normalizedSessionSearchQuery={normalizedSessionSearchQuery}
-    notifyOnSubtasks={notifyOnSubtasks}
     editingId={editingId}
     editingRowKey={editingRowKey}
      editTitle={editTitle}
@@ -1066,7 +1063,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
             : bootstrapLoading
               ? (
                 <span className="inline-flex items-center gap-1.5">
-                  <Icon name="loader-4" className="size-3 animate-spin" />
+                  <Spinner className="size-3" />
                   {t('sessions.sidebar.group.empty.loadingSessions')}
                 </span>
               )
@@ -1174,7 +1171,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                 <span className="flex w-full min-w-0 items-center gap-0.5">
                   {headerSlot(worktreeRemoving ? (
                     <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted-foreground" title={t('sessions.sidebar.group.worktreeRemoving')} role="status" aria-label={t('sessions.sidebar.group.worktreeRemoving')}>
-                      <Icon name="loader-4" className="h-3.5 w-3.5 animate-spin" />
+                      <Spinner className="h-3.5 w-3.5" />
                     </span>
                   ) : (
                     <Icon name={group.space ? 'box-3' : 'git-branch'}
@@ -1204,7 +1201,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                       onKeyDown={(event) => event.stopPropagation()}
                       onClick={(event) => {
                         event.stopPropagation();
-                        if (groupPrSummary.url) openOnBoard(groupPrSummary.url, group.directory ?? null, event);
+                        if (groupPrSummary.url) openTrackerItem(groupPrSummary.url, boardDirectory, event);
                       }}
                     >
                       {groupPrReference}
@@ -1227,7 +1224,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                         event.stopPropagation();
                         // The `+N` only counts the others; the tooltip lists them.
                         if (event.target instanceof Element && event.target.closest('[data-ref-more]')) return;
-                        openOnBoard(primaryGroupIssue.url, group.directory ?? null, event);
+                        openTrackerItem(primaryGroupIssue.url, boardDirectory, event);
                       }}
                     >
                       <Icon name={primaryGroupIssue.icon} className="h-3 w-3" />
@@ -1251,7 +1248,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                 ) : (
                   <Icon name="git-branch" className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                 )}
-                <span className="min-w-0 truncate text-[11px] font-medium text-muted-foreground/80">
+                <span className="min-w-0 truncate text-[0.6875rem] font-medium text-muted-foreground/80">
                   {statusLine.label}
                 </span>
               </span>
@@ -1263,11 +1260,11 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
       </TooltipTrigger>
       {groupPrLinks.length > 0 ? (
         <TooltipContent side="right" sideOffset={8} className="max-w-xs">
-          <SidebarRefLinks items={groupPrLinks} directory={group.directory ?? null} />
+          <SidebarRefLinks items={groupPrLinks} directory={boardDirectory} />
         </TooltipContent>
       ) : !groupPrSummary && primaryGroupIssue ? (
         <TooltipContent side="right" sideOffset={8} className="max-w-xs">
-          <SidebarRefLinks items={groupIssueItems} directory={group.directory ?? null} />
+          <SidebarRefLinks items={groupIssueItems} directory={boardDirectory} />
         </TooltipContent>
       ) : null}
       </Tooltip>
