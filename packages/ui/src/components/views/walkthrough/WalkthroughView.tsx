@@ -13,6 +13,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
 import { dropdownMenuPopupClass } from '@/components/ui/dropdown-menu.styles';
+import { ReviewSubmitButton } from '@/components/review/ReviewSubmitButton';
+import { ChangeRequestReviewContext, useComparisonReview } from '@/components/review/useChangeRequestReview';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isRightToLeft, useI18n } from '@/lib/i18n';
 import { changeRequestCopy } from '@/lib/source-control/changeRequestCopy';
@@ -59,6 +61,7 @@ import { NestedRepoPicker } from '@/components/views/git/NestedRepoPicker';
 import { revisionSuffix } from '@/lib/diff/pullRequestDiff';
 import { ContextPanelHeaderToolbar } from '@/components/layout/contextPanelHeaderSlot';
 import { useInContextPanelHeader } from '@/components/layout/contextPanelHeaderSlotContext';
+import { diffCommentOriginFromTarget } from '@/lib/diffCommentOrigin';
 
 interface WalkthroughViewProps {
   directory: string;
@@ -107,10 +110,9 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
   const inPanelHeader = useInContextPanelHeader();
   const [panelWidth, setPanelWidth] = useState(0);
 
-  // The walkthrough documents one repository. When the root is not itself a
-  // repository, that is the resolved nested repository; everything below keys
-  // off `directory`.
-  const { rootIsGitRepo, gitDirectory, nestedRepos, repositoryOptions } = useNestedGitDirectory(rootDirectory || null, { enabled: visible });
+  // The walkthrough documents one repository: the one picked from the picker,
+  // or the root when nothing is picked. Everything below keys off `directory`.
+  const { rootIsGitRepo, gitDirectory, nestedRepos, repositoryOptions } = useNestedGitDirectory(rootDirectory || null, { enabled: visible, recheckOnOpen: true });
   const directory = gitDirectory ?? rootDirectory;
 
   // Panel width, not viewport width: this surface is resizable independently of
@@ -268,6 +270,8 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
     [branchSource, isCommitScope, isPrScope, readContext, readsChangeRequests, requestedTarget, scope, selectedCommitHash, selectedPr]
   );
   const source = target.source;
+  const commentOrigin = useMemo(() => diffCommentOriginFromTarget(target), [target]);
+  const { review: changeRequestReview, provider: reviewProvider } = useComparisonReview(prComparison, directory, visible && isPrScope);
   // A scope the person picked before its subject exists: the base of a branch
   // comparison, or which commit to read. Nothing loads until they say.
   const choosingBranchBase = pendingSourceSelection?.directory === directory
@@ -365,13 +369,14 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
   }
 
   return (
+    <ChangeRequestReviewContext.Provider value={changeRequestReview}>
     <div ref={rootRef} data-find-surface="" className="flex h-full min-h-0 flex-col">
       <ContextPanelHeaderToolbar>
       <header
         ref={headerRef}
         className={cn(
           'walkthrough-header flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden',
-          inPanelHeader ? 'flex-1 py-1 pe-1' : 'shrink-0 border-b border-border/60 px-3 py-2'
+          inPanelHeader ? 'flex-1 py-1 pe-1' : 'shrink-0 border-b border-edge px-3 py-2'
         )}
       >
         {repositoryOptions ? (
@@ -387,18 +392,24 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
           </div>
         ) : null}
         <DropdownMenu open={sourceMenuOpen} onOpenChange={setSourceMenuOpen}>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className={cn(dropdownTriggerVariants(), 'shrink-0')}
-              aria-label={t('walkthrough.scope.selectorAria')}
-              title={sourceLabel}
-            >
-              <Icon name={sourceIcon} className="walkthrough-header__source-icon" />
-              <span className="walkthrough-header__source-label">{sourceLabel}</span>
-              <Icon name="arrow-down-s" />
-            </button>
-          </DropdownMenuTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex shrink-0">
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(dropdownTriggerVariants(), 'shrink-0')}
+                    aria-label={t('walkthrough.scope.selectorAria')}
+                  >
+                    <Icon name={sourceIcon} className="walkthrough-header__source-icon" />
+                    <span className="walkthrough-header__source-label">{sourceLabel}</span>
+                    <Icon name="arrow-down-s" />
+                  </button>
+                </DropdownMenuTrigger>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6}>{t('walkthrough.scope.selectorAria')}</TooltipContent>
+          </Tooltip>
           <DropdownMenuContent align="start" className="w-48">
             <DropdownMenuRadioGroup
               value={sourceValue}
@@ -503,12 +514,19 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
         )}
 
         <div className="ms-auto flex shrink-0 items-center gap-1">
-          {isPrScope && selectedPr && !prDiffUnavailable && <Button variant="ghost" size="sm" className="walkthrough-header__option"
-            aria-label={t('contextPanel.mode.diff')} title={t('contextPanel.mode.diff')}
-            onClick={openChanges}>
-            <Icon name="arrow-left-right" className="size-4" />
-            <span className="walkthrough-header__label">{t('contextPanel.mode.diff')}</span>
-          </Button>}
+          {isPrScope && selectedPr && !prDiffUnavailable && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" className="walkthrough-header__option"
+                  aria-label={t('contextPanel.mode.diff')}
+                  onClick={openChanges}>
+                  <Icon name="arrow-left-right" className="size-4" />
+                  <span className="walkthrough-header__label">{t('contextPanel.mode.diff')}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>{t('contextTooltips.walkthrough.openChanges')}</TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -535,33 +553,46 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
           )}
           {view && (
             <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="walkthrough-header__step-arrow"
-                aria-label={t('walkthrough.action.previous')}
-                onClick={() => review.step(-1)}
-              >
-                <Icon name="arrow-right-s" className="size-4 rotate-180" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="walkthrough-header__step-arrow"
+                    aria-label={t('walkthrough.action.previous')}
+                    onClick={() => review.step(-1)}
+                  >
+                    <Icon name="arrow-right-s" className="size-4 rotate-180" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6}>{t('walkthrough.action.previous')}</TooltipContent>
+              </Tooltip>
               {/* Without the contents column the arrows alone say neither where
                   the reader is nor what is ahead, so the position opens the
                   list of steps. */}
               {!showToc && <WalkthroughStepMenu review={review} view={view} />}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="walkthrough-header__step-arrow"
-                aria-label={t('walkthrough.action.next')}
-                onClick={() => review.step(1)}
-              >
-                <Icon name="arrow-right-s" className="size-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="walkthrough-header__step-arrow"
+                    aria-label={t('walkthrough.action.next')}
+                    onClick={() => review.step(1)}
+                  >
+                    <Icon name="arrow-right-s" className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6}>{t('walkthrough.action.next')}</TooltipContent>
+              </Tooltip>
             </>
           )}
 
+          {changeRequestReview && reviewProvider ? (
+            <ReviewSubmitButton review={changeRequestReview} provider={reviewProvider} labelClassName="walkthrough-header__label" />
+          ) : null}
           {!prDiffUnavailable && (headerOffersGeneration || review.isGenerating) && (
             <WalkthroughGenerateButton
               review={review}
@@ -571,20 +602,25 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
             />
           )}
           <Popover.Root open={moreOpen} onOpenChange={setMoreOpen}>
-            <Popover.Trigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="walkthrough-header__more data-[popup-open]:bg-interactive-hover"
-                  aria-label={t('walkthrough.options.moreAria')}
-                  title={t('walkthrough.options.moreAria')}
-                />
-              }
-            >
-              <Icon name="more" className="size-4" />
-            </Popover.Trigger>
+            {/* The popover keeps the page live under it, so a pointer back on the button would reopen the tooltip over it. */}
+            <Tooltip disabled={moreOpen}>
+              <TooltipTrigger asChild>
+                <Popover.Trigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="walkthrough-header__more data-[popup-open]:bg-interactive-hover"
+                      aria-label={t('walkthrough.options.moreAria')}
+                    />
+                  }
+                >
+                  <Icon name="more" className="size-4" />
+                </Popover.Trigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>{t('walkthrough.options.moreAria')}</TooltipContent>
+            </Tooltip>
             <Popover.Portal>
               <Popover.Positioner side="bottom" align="end" sideOffset={4} className="z-50">
                 <Popover.Popup
@@ -694,6 +730,7 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
                 onScrollHandled={review.clearScrollRequest}
                 renderSideBySide={renderSideBySide}
                 wrapLines={wrapLines}
+                commentOrigin={commentOrigin}
                 summary={showToc ? undefined : view.walkthrough.focus}
                 uncoveredOpenRequest={findInWalkthrough.uncoveredOpenRequest}
                 registerFindViewerRef={findInWalkthrough.registerViewer}
@@ -706,5 +743,6 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
         )}
       </div>
     </div>
+    </ChangeRequestReviewContext.Provider>
   );
 };

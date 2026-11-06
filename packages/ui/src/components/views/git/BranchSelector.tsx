@@ -278,7 +278,7 @@ export const BranchSelector: React.FC<BranchSelectorProps> = ({
             onKeyDown={stopDropdownTypeahead}
           />
           {switchBlockedNotice ? (
-            <div className="flex items-start gap-2 border-b border-border/60 px-3 py-2">
+            <div className="flex items-start gap-2 border-b border-edge px-3 py-2">
               <Icon name="alert" className="mt-0.5 size-3.5 shrink-0 text-[var(--status-warning)]" aria-hidden="true" />
               <span className="typography-micro text-muted-foreground">{switchBlockedNotice}</span>
             </div>
@@ -320,6 +320,7 @@ export const BranchSelector: React.FC<BranchSelectorProps> = ({
                     onClick={handleCreate}
                     disabled={!sanitizedNewBranch || isCreating}
                     className="shrink-0 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    aria-label={t('gitView.history.actions.createBranchConfirm')}
                   >
                     {isCreating ? (
                       <Icon name="loader-4" className="size-4 animate-spin" />
@@ -332,6 +333,7 @@ export const BranchSelector: React.FC<BranchSelectorProps> = ({
                     onClick={handleCancelCreate}
                     disabled={isCreating}
                     className="shrink-0 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    aria-label={t('gitView.common.cancel')}
                   >
                     <Icon name="close" className="size-4" />
                   </button>

@@ -50,7 +50,14 @@ Panel göstermek ve hangi proje ile oturumun açık olduğunu okumak izin gerekt
 - **Small Model’inizi kullanma**: oturumlarınızın dışında tek seferlik metin üretimi, Ayarlar → Oturumlar → Small Model'deki modelle. Jeton harcar.
 - **Dış bir hizmete bağlanma**: Ayarlar → Entegrasyonlar altında bağladığınız hesapla.
 - **Bir oturumun konuşmasını okuma**: yalnızca o oturumda uzantının eylemini çalıştırdığınızda.
-- **Yerel servis çalıştırma**: kullanıcı hesabınızın tüm erişimine sahip ayrı bir program. Yalnızca yazara güveniyorsanız izin verin.
+- **Yerel servis çalıştırma**: kullanıcı hesabınızın tüm erişimine sahip ayrı bir program. Yalnızca yazara güveniyorsanız izin verin. Uzantı oturumlarınızda olanların kendisine bildirilmesini istiyorsa bu satır haber alacağı anları da listeler: bir tur biter, bir tur başarısız olur, ajan izin ister, ajan soru sorar. Bunları her projede, açık bir pencere olmadan öğrenir ve yalnızca tanımlayıcıları alır: oturum, projesi ve oturuma iliştirdiğiniz öğeler.
+- **Ajanın arka planda söylediklerini okuma**: her turun son yanıtı, ajanın sorduğu sorular ve ne için izin istediği, her projede, uzantının yerel servisine gönderilir. Yalnızca uzantının bunları gönderdiği yere güveniyorsanız izin verin.
+- **Kendi başına oturum başlatma ve mesaj gönderme**: yerel servisi bunu açık bir pencere olmadan yapar, bu jeton harcar ve araç çalıştırabilir.
+- **Ajanların okuduklarına ekleme**: oturumlarınızın talimatlarındaki metin ve uzantı açıkken her ajana sunulan beceriler.
+
+Yerel bir servis ayrıca OpenChamber çalıştığı sürece çalışmaya devam edebilir veya bir takvime göre uyanabilir. İletişim kutusu bunu **Yerel servis çalıştırma** altında söyler ve `@` işaretinden sonra yazdıklarınızın servise ne zaman gittiğini de belirtir. Bir uzantı `@` menüsüne kendi satırlarını, ajan yanıtlarına da kendi bloklarını ekleyebilir. Uzantıyı duraklatmak bunların hepsini kaldırır.
+
+Bildirimlerinizi Slack'e, Matrix'e ya da kendi sunucusuna ileten bir uzantı bunu da **Yerel servis çalıştırma** altında, **Bildirimlerinizi** sözcüğüyle başlayan bir satırla söyler. [Ayarlar → Entegrasyonlar](/tr/integrations/#uzantı-bildirim-kanalları)'da onun için bir hesap bağlamadan önce hiçbir şey dışarı çıkmaz; sonrasında telefonunuzun alacağını alır ve uzantıyı duraklatmak bunu durdurur.
 
 Daha yeni bir sürüm izin verdiğinizden fazlasını istediğinde kart **Onay gerekli** ve bir **İzinleri incele** düğmesi gösterir. Yeni listeye izin verene kadar o uzantı kapalı kalır.
 
@@ -71,6 +78,28 @@ Jetonunuz OpenChamber'da kalır. Uzantı, sunucuyu kendisi adına çağırmasın
 Uzantıyı duraklatmak, siz yeniden açana kadar sunucuyu kaldırır; hesabınız kalır. Uzantıyı kaldırmak hesabı unutur. VS Code, uzantılardan gelen Git sunucularını göstermez.
 
 OpenChamber SDK'sinde başlangıç için çalışan bir örnek var: `examples/source-control-provider`. Bkz. [Uzantı geliştirme](/tr/sdk/).
+
+## İzleyici olarak bir uzantı
+
+Bir uzantı Linear'ın yanına bir iş öğesi izleyicisi ekleyebilir: YouTrack, Jira, Plane ya da kendi izleyicisi. O zaman izin iletişim kutusunda izleyicinin adıyla birlikte **izleyicisi olarak çalışır** diyen bir satır bulunur. Aynı satır OpenChamber'ın ona ne gönderdiğini de söyler: aramalarınız ve açtığınız öğeler; ayrıca sizin yerinize bunların durumunu değiştirmesinin ve oturum yorumları göndermesinin istendiğini.
+
+İzin verdiğinizde izleyici, **Ayarlar → Entegrasyonlar** içinde **Uzantı hesapları** altında kendi kartını alır. Orada bir hesap bağlayın: bir jetonla ya da izleyiciye kaydettirdiğiniz uygulamanın client id'sini girdikten sonra tarayıcıda oturum açarak; kart isterse önce sunucunun adresini de girin. Bundan sonra öğeleri Linear'ınkilerin bulunduğu her yerdedir: sohbetin **+** menüsü ve seçici, New Worktree, bir oturumun bağlı öğeleri ve takip ettiğiniz öğelerin canlı durumları. Öğelerinden birine yapıştırılan bir bağlantı da aynı şekilde tanınır. Bunların her birinin ne yaptığı için bkz. [Linear](/tr/integrations/#linear).
+
+Jetonlarınız OpenChamber'da kalır. Uzantı, izleyiciyi kendisi adına çağırmasını OpenChamber'dan ister; OpenChamber kimlik bilgisini her çağrıya yalnızca bağladığınız sunucu için ekler. Uzantı onu hiçbir zaman almaz ve orada yalnızca durum değiştirme ile yorum çağrıları bir şey yazabilir.
+
+Uzantıyı duraklatmak, siz yeniden açana kadar izleyiciyi kaldırır; hesaplarınız kalır. Uzantıyı kaldırmak hesapları unutur. VS Code izleyici göstermez; telefonda izleyicinin öğeleri görünür, hesaplar ise web ya da masaüstü uygulamasından bağlanır.
+
+OpenChamber SDK'sinde çalışan bir örnek var: `examples/tracker-provider`, yanında çalıştırılacak sahte bir izleyiciyle birlikte. Bkz. [Uzantı geliştirme](/tr/sdk/).
+
+## Kullanım sağlayıcısı olarak bir uzantı
+
+Bir uzantı, yerleşik sağlayıcıların yanına bir kullanım sağlayıcısı ekleyebilir: OpenChamber'ın kendisinin okumadığı bir sağlayıcı ya da uzantının kendi sağlayıcısı. İzin iletişim kutusunda o zaman **Yerleşik bir sağlayıcı gibi kullanımı bildirir** ile başlayan bir satır bulunur ve kimlik bilgilerini okuduğu OpenCode sağlayıcıları, örneğin `openrouter`, listelenir; hiçbirini listelemeyen bir uzantı bunu söyler.
+
+İzin verdiğinizde kartı **Ayarlar → Kullanım** sayfasında yerleşik sağlayıcıların arkasında, uzantının adı ve simgesiyle durur; **Çalışma durumunda göster** seçeneğini işaretlediğinizde her yerleşik sağlayıcı gibi üst bilgideki hız sınırlarına, çalışma durumuna, telefondaki açılır pencereye ve masaüstü tepsisine katılır. Her yenilemede OpenChamber, listelenen her sağlayıcı için OpenCode'un sakladığı kimlik bilgisini uzantıya verir, başka hiçbir şey vermez; başka bir sağlayıcı listeleyen bir sürüm yeniden onayınızı ister. Kullanımı uzantı kendisi okur, OpenChamber ise onu yerleşik bir sağlayıcınınki gibi çizer.
+
+Uzantıyı duraklatmak, siz yeniden açana kadar kartı kaldırır; onun için yaptığınız kullanım ayarları kalır. Uzantıyı kaldırmak kartı kalıcı olarak kaldırır. VS Code uzantılardan gelen kullanımı göstermez; telefonda kart görünür, uzantı ise web ya da masaüstü uygulamasından kurulur. Yalıtılmış bir alandaki oturum, kullanımı o alanın kendi sunucusundan okur ve orada uzantı yoktur.
+
+OpenChamber SDK'sinde çalışan bir örnek var: `examples/quota-provider`, yanında çalıştırılacak sahte bir kullanım API'siyle birlikte. Bkz. [Uzantı geliştirme](/tr/sdk/).
 
 ## Hesabını bağlama
 

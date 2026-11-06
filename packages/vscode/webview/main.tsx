@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import { createVSCodeAPIs } from './api';
 import { createRemovalTombstones } from './inlineCommentRemovals';
 import { resolveCommentTarget } from './inlineCommentTarget';
@@ -27,6 +26,7 @@ import { focusChatInput } from '@openchamber/ui/components/chat/composer/editor/
 import { hostViewerStateSchema, reportHostViewerState } from '@openchamber/ui/lib/surfaceAttention';
 import { vscodeSettingsNavigationSchema } from '@openchamber/ui/lib/settings/vscodeNavigation';
 import { applyVSCodeSettingsNavigation } from '@openchamber/ui/apps/vscodeSettingsNavigation';
+import { applyVSCodeSessionNavigation, vscodeSessionNavigationSchema } from '@openchamber/ui/apps/vscodeSessionNavigation';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'error' | 'disconnected';
 
@@ -350,22 +350,14 @@ const unsupportedWebRouteResponse = (feature: string): Response => {
  * as 400, the rest as 500. A host failure whose code is in `answeredCodes`
  * comes back as 409 with that code, the way the web server's route answers it.
  */
-const bridgeJsonRoute = async (bridgeType: string, payload: unknown, answeredCodes: readonly string[] = []): Promise<Response> => {
+const bridgeJsonRoute = async (bridgeType: string, payload: unknown): Promise<Response> => {
   try {
     return jsonResponse(await sendBridgeMessage(bridgeType, payload), 200);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Request failed';
-    if (error instanceof BridgeRequestError && error.code && answeredCodes.includes(error.code)) {
-      return jsonResponse({ error: message, code: error.code }, 409);
-    }
     return jsonResponse({ error: message }, /must be|is required|session id/.test(message) ? 400 : 500);
   }
 };
-
-// The host could not write metadata because the session's folder is gone; the
-// UI then offers archive. Mirrors `SESSION_DIRECTORY_MISSING_CODE` in
-// packages/vscode/src/bridge-system-runtime.ts.
-const SESSION_DIRECTORY_MISSING_CODE = 'SESSION_DIRECTORY_MISSING';
 
 const pluginConfigErrorStatus = (message: string): number => {
   const lower = message.toLowerCase();
@@ -469,7 +461,7 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     if (method === 'GET') return bridgeJsonRoute('api:sessions/metadata:get', { sessionId });
     const body = await extractJsonBody(input, init, method);
     const patch = body && typeof body === 'object' && !Array.isArray(body) ? (body as { patch?: unknown }).patch : undefined;
-    return bridgeJsonRoute('api:sessions/metadata:set', { sessionId, patch }, [SESSION_DIRECTORY_MISSING_CODE]);
+    return bridgeJsonRoute('api:sessions/metadata:set', { sessionId, patch });
   }
 
   if (/^\/api\/projects\/[^/]+\/scheduled-tasks(?:\/[^/]+)?$/.test(normalizedPathname)) {
@@ -808,6 +800,14 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     }
   }
 
+  if (pathname === '/api/config/warming' && method === 'PUT') {
+    return bridgeJsonRoute('api:config/warming', await extractJsonBody(input, init, method));
+  }
+
+  if (pathname === '/api/config/compaction' && method === 'PUT') {
+    return bridgeJsonRoute('api:config/compaction', await extractJsonBody(input, init, method));
+  }
+
   if (pathname === '/api/config/skill-switch' && method === 'PUT') {
     const body = await extractJsonBody(input, init, method);
     const directory = getRequestDirectoryHint(url, input, init);
@@ -884,7 +884,9 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
       return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return new Response(JSON.stringify({ error: message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      // The same status the web server gives a taken name, which the UI tells apart.
+      const status = message.includes('already exists') ? 409 : 500;
+      return new Response(JSON.stringify({ error: message }), { status, headers: { 'Content-Type': 'application/json' } });
     }
   }
 
@@ -1257,6 +1259,11 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     const body = await extractJsonBody(input, init, method);
     const result = await sendBridgeMessage('api:openchamber/directory', { path: body.path });
     return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  // VS Code loads no extensions.
+  if (pathname === '/api/quota/extensions') {
+    return new Response(JSON.stringify({ extensions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
 
   if (pathname === '/api/quota/providers') {
@@ -1737,10 +1744,15 @@ onCommand('addFileAttachments', (payload) => {
     return;
   }
 
-  import('@/sync/input-store').then(({ useInputStore }) => {
+  Promise.all([import('@/sync/input-store'), import('@/components/ui')]).then(([{ useInputStore }, { toast }]) => {
     const inputStore = useInputStore.getState();
     for (const file of files) {
-      inputStore.addVSCodeFileAttachment(file.filePath, file.fileName, file.fileSize);
+      try {
+        inputStore.addVSCodeFileAttachment(file.filePath, file.fileName, file.fileSize);
+      } catch (error) {
+        // The store names the cause (a file too large to send).
+        if (error instanceof Error) toast.error(error.message);
+      }
     }
   });
 });
@@ -1857,16 +1869,10 @@ const showOpenChamberNotification = (payload: { title: string; body: string; ses
   void sendBridgeMessage('api:notifications:show', payload).catch(() => undefined);
 };
 
-const openSessionPayloadSchema = z.object({ sessionId: z.string().min(1) });
-
 // "Open Session" on a notification.
 onCommand('openSession', (payload) => {
-  const sessionId = openSessionPayloadSchema.safeParse(payload).data?.sessionId;
-  if (!sessionId) return;
-  void import('@/sync/session-ui-store').then(({ useSessionUIStore }) => {
-    useSessionUIStore.getState().setCurrentSession(sessionId);
-  });
-  window.dispatchEvent(new CustomEvent('openchamber:navigate', { detail: { view: 'chat' } }));
+  const navigation = vscodeSessionNavigationSchema.safeParse(payload);
+  if (navigation.success) applyVSCodeSessionNavigation(navigation.data);
 });
 
 onCommand('viewerStateChanged', (payload) => {

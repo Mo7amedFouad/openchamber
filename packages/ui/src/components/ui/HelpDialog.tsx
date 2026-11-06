@@ -12,6 +12,7 @@ import {
   getEffectiveShortcutCombo,
   getEffectiveShortcutPrefix,
   getShortcutAction,
+  isShortcutAvailable,
   formatShortcutForDisplay,
   type ShortcutActionId,
 } from "@/lib/shortcuts";
@@ -83,6 +84,12 @@ export const HelpDialog: React.FC = () => {
           icon: "ai-agent",
         },
         {
+          id: 'search_prompt_history',
+          keys: '',
+          descriptionKey: 'helpDialog.item.searchPromptHistory',
+          icon: 'history',
+        },
+        {
           id: 'open_model_selector',
           descriptionKey: "helpDialog.item.openModelSelector",
           icon: "ai-generate-2",
@@ -105,9 +112,10 @@ export const HelpDialog: React.FC = () => {
           keys: '',
         },
         {
-          keys: [formatShortcutForDisplay('mod+shift+alt+n')],
+          id: 'new_window',
           descriptionKey: "helpDialog.item.newWindow",
           icon: "window",
+          keys: '',
         },
       ],
     },
@@ -173,9 +181,9 @@ export const HelpDialog: React.FC = () => {
           keys: '',
         },
         {
-          id: 'toggle_terminal_expanded',
-          descriptionKey: 'helpDialog.item.toggleTerminalExpanded',
-          icon: "window",
+          id: 'toggle_context_panel_expanded',
+          descriptionKey: 'helpDialog.item.toggleContextPanelExpanded',
+          icon: "layout-right",
           keys: '',
         },
         {
@@ -239,7 +247,7 @@ export const HelpDialog: React.FC = () => {
             const action = shortcut.id ? getShortcutAction(shortcut.id) : undefined;
             const descriptionKey = shortcut.descriptionKey
               ?? (action?.customizable ? action.settingsLabelKey : undefined);
-            if (!descriptionKey) return null;
+            if (!descriptionKey || (action && !isShortcutAvailable(action))) return null;
             // This dialog lists what the keyboard can do right now;
             // an action without a binding belongs to the command
             // palette and Settings, not here.
@@ -276,7 +284,7 @@ export const HelpDialog: React.FC = () => {
                           {t('helpDialog.keyCombiner.or')}
                         </span>
                       )}
-                      <kbd className="inline-flex items-center gap-1 px-1.5 py-0.5 typography-meta bg-muted rounded border border-border/20">
+                      <kbd className="inline-flex items-center gap-1 px-1.5 py-0.5 typography-meta bg-muted rounded border border-edge-muted">
                         {keyCombo}
                       </kbd>
                     </React.Fragment>

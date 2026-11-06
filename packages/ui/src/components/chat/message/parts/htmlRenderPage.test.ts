@@ -390,6 +390,31 @@ describe('the page height', () => {
         expect(sizes()).toEqual([90]);
     });
 
+    const barRoundingCases: Array<[number, number[]]> = [[48, [515]], [49, [514, 515]]];
+    for (const [startHeight, expected] of barRoundingCases) {
+        test(`settles on one height when rounding changes the scrollbar's height with the frame (from ${startHeight} px)`, () => {
+            // A 505 px page wider than its frame at 175%: the window's and the
+            // root's heights are rounded, so the 10 px bar reads 9 at odd frame
+            // heights and 10 at even ones.
+            const page = mountPage(undefined, '<div style="width:1100px;height:505px"></div>');
+            const { win } = page;
+            const root = win.document.documentElement;
+            let frameHeight = startHeight;
+            Object.defineProperty(win, 'innerHeight', { get: () => frameHeight, configurable: true });
+            Object.defineProperty(root, 'clientHeight', { get: () => frameHeight - (frameHeight % 2 ? 9 : 10), configurable: true });
+            Object.defineProperty(root, 'scrollHeight', { get: () => Math.max(frameHeight - (frameHeight % 2 ? 9 : 10), 505), configurable: true });
+            root.getBoundingClientRect = () => new win.DOMRect(0, 0, 600, 505);
+
+            const sizes = () => page.reports.flatMap((report) => (report?.kind === 'size' ? [report.height] : []));
+            for (let round = 0; round < 6; round += 1) {
+                frameHeight = sizes().at(-1) ?? frameHeight;
+                win.dispatchEvent(new win.Event('resize'));
+            }
+
+            expect(sizes()).toEqual(expected);
+        });
+    }
+
     test('sizes again when the scrollbar appears without the root resizing', async () => {
         const page = mountPage(undefined, '<div id="row" style="height:300px"></div>');
         const { win } = page;
@@ -448,6 +473,52 @@ describe('the page height', () => {
         // The box spans the frame once the frame fits it; grown past that
         // once, it does not follow, and the frame goes back for good.
         expect(sizes).toEqual([200, 349, 200]);
+    });
+
+    for (const bar of [0, 10]) {
+        test(`keeps a grown box's height when measured again before the frame resizes (${bar}px scrollbar)`, () => {
+            const page = mountPage(undefined, '<div id="screen" style="overflow-y:auto"><div style="height:349px"></div></div>');
+            const { win } = page;
+            const root = win.document.documentElement;
+            const screen = win.document.getElementById('screen');
+            if (!screen) throw new Error('no scroller');
+            Object.defineProperty(win, 'innerHeight', { get: () => 48, configurable: true });
+            Object.defineProperty(root, 'clientHeight', { get: () => 48 - bar, configurable: true });
+            Object.defineProperty(root, 'scrollHeight', { get: () => 48 - bar, configurable: true });
+            root.getBoundingClientRect = () => new win.DOMRect(0, 0, 600, 48);
+            Object.defineProperty(screen, 'clientHeight', { get: () => 48, configurable: true });
+            Object.defineProperty(screen, 'scrollHeight', { get: () => 349, configurable: true });
+            screen.getBoundingClientRect = () => new win.DOMRect(0, 0, 600, 48);
+
+            // The page's load measures it again while the host has not yet
+            // given the frame the height it reported.
+            win.dispatchEvent(new win.Event('resize'));
+            win.dispatchEvent(new win.Event('load'));
+
+            expect(page.reports.flatMap((report) => (report?.kind === 'size' ? [report.height] : []))).toEqual([349 + bar]);
+        });
+    }
+
+    test('settles on one height with content sized to the frame at a fractional display scale', () => {
+        // `body{min-height:100vh}` at 175%: the frame snaps to device pixels,
+        // so the page measures a fraction above whatever height it is given.
+        const page = mountPage(undefined, '<p>Sized to the frame</p>');
+        const { win } = page;
+        const root = win.document.documentElement;
+        let frameHeight = 387;
+        const pageHeight = () => frameHeight + 0.43;
+        Object.defineProperty(win, 'innerHeight', { get: () => frameHeight, configurable: true });
+        Object.defineProperty(root, 'clientHeight', { get: () => frameHeight, configurable: true });
+        Object.defineProperty(root, 'scrollHeight', { get: () => frameHeight, configurable: true });
+        root.getBoundingClientRect = () => new win.DOMRect(0, 0, 600, pageHeight());
+
+        const sizes = () => page.reports.flatMap((report) => (report?.kind === 'size' ? [report.height] : []));
+        for (let round = 0; round < 6; round += 1) {
+            frameHeight = sizes().at(-1) ?? frameHeight;
+            win.dispatchEvent(new win.Event('resize'));
+        }
+
+        expect(sizes()).toEqual([387]);
     });
 });
 

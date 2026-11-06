@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { OPENCODE_CONFIG_DIR } from './opencodeConfigPaths';
+import { readMachineSetting } from './machine-settings';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -55,13 +56,15 @@ import {
   updateMcpConfig,
   deleteMcpConfig,
   expandSnippets,
+  previewSnippet,
   setWebSearchSelection,
   setWarmingEnabled,
+  setCompactionSettings,
   setSkillEnabled,
   getWebSearchSource,
   type SnippetScope,
 } from './opencodeConfig';
-import { parseWebSearchSelection, skillSwitchRequestSchema } from './opencode-config-v2';
+import { compactionUpdateSchema, parseWebSearchSelection, skillSwitchRequestSchema } from './opencode-config-v2';
 import {
   getSkillsCatalogSourceItems,
   getSkillsCatalogSources,
@@ -148,10 +151,7 @@ export async function handleConfigBridgeMessage(
   switch (type) {
     case 'api:config/opencode-resolution:get': {
       const debugInfo = ctx?.manager?.getDebugInfo();
-      const configuredFromWorkspace = vscode.workspace.getConfiguration('openchamber').get<string>('opencodeBinary');
-      const configured = typeof configuredFromWorkspace === 'string' && configuredFromWorkspace.trim().length > 0
-        ? configuredFromWorkspace.trim()
-        : null;
+      const configured = readMachineSetting('opencodeBinary').trim() || null;
       const resolved = debugInfo?.cliPath ?? null;
       const source = (() => {
         if (!resolved) return null;
@@ -411,6 +411,17 @@ export async function handleConfigBridgeMessage(
       return { id, type, success: true, data: { success: true, changed: result.changed } };
     }
 
+    // PUT /api/config/compaction — see the web route in
+    // packages/web/server/lib/opencode/routes.js.
+    case 'api:config/compaction': {
+      const parsed = compactionUpdateSchema.safeParse(payload ?? {});
+      if (!parsed.success) {
+        return { id, type, success: false, error: 'buffer must be a token count, a share such as "20%" or null, keepTokens a token count or null, auto and background booleans' };
+      }
+      const result = setCompactionSettings(parsed.data);
+      return { id, type, success: true, data: { success: true, changed: result.changed } };
+    }
+
     // PUT /api/config/skill-switch — see the web route in
     // packages/web/server/lib/opencode/skill-routes.js.
     case 'api:config/skill-switch': {
@@ -593,7 +604,11 @@ export async function handleConfigBridgeMessage(
       }
 
       if (normalizedMethod === 'POST' && !snippetName) {
-        return { id, type, success: true, data: { text: expandSnippets(typeof body?.text === 'string' ? body.text : '', workingDirectory) } };
+        // `content` asks for a snippet body's preview, `text` for a prompt's expansion.
+        const text = body?.content !== undefined
+          ? previewSnippet(String(body.content), workingDirectory)
+          : expandSnippets(typeof body?.text === 'string' ? body.text : '', workingDirectory);
+        return { id, type, success: true, data: { text } };
       }
 
       if (!snippetName) {
